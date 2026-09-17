@@ -59,6 +59,7 @@ keyring entry works just as well:
 2. `$CF_API_TOKEN`
 3. `~/.config/cloudflarechy/token` (or `$CLOUDFLARECHY_TOKEN_FILE`)
 4. `secret-tool lookup service cloudflarechy`
+5. wrangler's own credential — see below
 
 An API token, not the legacy global key — this needs a handful of scopes and a
 token can be minted with exactly those:
@@ -76,12 +77,51 @@ token can be minted with exactly those:
 Read-only is a perfectly good way to run this: grant the Read scopes and the
 panel becomes a dashboard whose buttons simply say why they cannot act.
 
+### Or skip the token: `wrangler login`
+
+If you have ever run `wrangler login`, the panel already works. With no API
+token configured it falls back to wrangler's OAuth credential, which covers
+everything this plugin *reads* — zones, the full 24h analytics, tunnels and
+Workers.
+
+It cannot cover anything this plugin *writes*, and that is a hard ceiling
+rather than a precaution. The entire scope catalogue wrangler is able to
+request (`wrangler login --scopes-list`) contains exactly one zone scope:
+
+```
+zone:read    Grants read level access to account zone.
+```
+
+There is no zone-settings-write and no cache-purge scope to ask for, so no
+re-login can unlock the three switches. The panel marks the zone `READ-ONLY`,
+disables them, and says why on hover.
+
+The other catch is the clock. Wrangler's token lasts about an hour and only
+wrangler can renew one — this plugin deliberately will not rotate the tokens in
+wrangler's config, because it does not own that file and a botched rotation
+would cost you your `wrangler` login. When it lapses the panel says
+`wrangler session expired` and asks you to run any wrangler command. The footer
+always shows which credential answered and when it runs out:
+
+```
+Acme Inc  ·  token: wrangler until 01:47  ·  updated 00:59
+```
+
+So: wrangler is the zero-setup way to look. An API token is the way to *act*,
+and the only way the bar dot stays honest while you are not looking.
+
 ## What it shows
 
 **Last 24 hours** — requests, share served from cache, bytes served, unique
 visitors, threats blocked, then one bar per hour. Each bar is that hour's
-requests; the filled part at its foot is the share that came from cache. Bars
-are scaled against the busiest hour in the window, not an absolute ceiling.
+requests; the filled part at its foot is the share that came from cache.
+
+Bar heights are logarithmic, scaled against the busiest hour in the window.
+Real traffic settled that: a zone idling at 16 requests an hour took a
+3,016-request crawl, and on a linear scale every other hour of the day — one of
+them 18x the baseline — collapsed into a flat line under the spike. The graph
+is there to show shape: a spike, a gap, the daily rhythm. The exact figures sit
+above it and are not derived from it.
 
 `visitors` shows `—` rather than `0` when the plan does not expose uniques —
 those are different facts.
@@ -169,6 +209,9 @@ omarchy-shell cloudflarechy toggle
 - Editing this plugin's QML hot-reloads for most changes, but a bar widget that
   is already mounted can keep the old component; `omarchy restart shell` is the
   reliable way to see an edit.
+- The wrangler fallback only ever issues reads. Writes stop inside
+  `bin/cloudflarechy` rather than at Cloudflare, so you get a sentence about
+  which credential you are holding instead of a passed-through `9109`.
 - The cloud mark is drawn in QML, not Cloudflare's logo file. It follows your
   theme on the bar and goes orange in the panel header.
 - The screenshot above was taken against a local stand-in API, so the zone,

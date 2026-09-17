@@ -53,6 +53,15 @@ Panel {
   property string tokenSource: ""
   property string tokenMessage: ""
 
+  // Which credential answered, and what it is allowed to do. Wrangler's OAuth
+  // grant reads everything this panel shows and can write none of it — the
+  // whole scope catalogue it can request holds one zone scope, `zone:read`.
+  // So the switches are not disabled here out of caution; they are disabled
+  // because Cloudflare will not issue the permission to enable them.
+  property string tokenKind: ""
+  property string tokenExpiresAt: ""
+  property bool readOnly: false
+
   property string error: ""
   property string hint: ""
   property string tunnelsError: ""
@@ -151,6 +160,9 @@ Panel {
       if (!payload) return
       root.tokenPresent = payload.token === true
       root.tokenSource = payload.token_source || ""
+      root.tokenKind = payload.token_kind || ""
+      root.tokenExpiresAt = payload.expires_at || ""
+      root.readOnly = payload.read_only === true
       root.tokenMessage = payload.valid === true ? "" : (payload.message || "")
       if (!root.tokenPresent) {
         root.error = payload.message || "no API token"
@@ -360,6 +372,24 @@ Panel {
     return Math.round(seconds / 86400) + "d ago"
   }
 
+  // Wrangler's token lasts about an hour and only it can renew one, so the
+  // footer prints the deadline rather than pretending the panel will keep
+  // working. Local time, because that is the clock the reader is looking at.
+  function localTime(iso) {
+    if (!iso) return ""
+    var when = new Date(iso)
+    if (isNaN(when.getTime())) return ""
+    return Qt.formatDateTime(when, "HH:mm")
+  }
+
+  readonly property string tokenLabel: {
+    if (root.tokenSource === "") return ""
+    var label = "token: " + root.tokenSource
+    var expiry = root.localTime(root.tokenExpiresAt)
+    if (expiry !== "") label += " until " + expiry
+    return label
+  }
+
   function tunnelColor(status) {
     if (status === "healthy") return "#4ca64c"
     if (status === "degraded") return root.brand
@@ -504,6 +534,7 @@ Panel {
         if (root.purgeConfirmOpen) return
         var key = t.toLowerCase()
         if (key === "r") root.refresh(true)
+        else if (root.readOnly) return
         else if (key === "d") root.toggleDevMode()
         else if (key === "u") root.toggleAttack()
         else if (key === "p" && root.zoneId !== "") root.purgeConfirmOpen = true
@@ -739,6 +770,7 @@ Panel {
               if (root.zone.status && root.zone.status !== "active")
                 bits.push(String(root.zone.status).toUpperCase())
               if (root.zone.paused) bits.push("PAUSED")
+              if (root.readOnly) bits.push("READ-ONLY")
               return bits.length > 0 ? "ZONE  ·  " + bits.join("  ·  ") : "ZONE"
             }
           }
@@ -754,12 +786,14 @@ Panel {
               // countdown is the point of showing it here.
               text: root.devMode ? "Dev mode  " + root.shortDuration(root.devModeSeconds)
                                  : "Dev mode"
-              tooltipText: root.devMode
+              tooltipText: root.readOnly
+                           ? "Needs an API token — wrangler can only be granted zone:read"
+                           : root.devMode
                            ? "Cache bypassed — turns itself off in "
                              + root.shortDuration(root.devModeSeconds) + " (d)"
                            : "Bypass the cache for 3 hours (d)"
               active: root.devMode
-              enabled: root.busyAction === ""
+              enabled: root.busyAction === "" && !root.readOnly
               foreground: root.devMode ? root.brand : root.foreground
               accent: root.brand
               bordered: true
@@ -768,13 +802,15 @@ Panel {
 
             Button {
               text: root.underAttack ? "Under attack  on" : "Under attack"
-              tooltipText: root.securityReadable
+              tooltipText: root.readOnly
+                           ? "Needs an API token — wrangler can only be granted zone:read"
+                           : root.securityReadable
                            ? (root.underAttack
                               ? "Interstitial on every visitor — restores the previous security level (u)"
                               : "Challenge every visitor (u)")
                            : "Needs Zone → Zone Settings → Read"
               active: root.underAttack
-              enabled: root.busyAction === "" && root.securityReadable
+              enabled: root.busyAction === "" && root.securityReadable && !root.readOnly
               foreground: root.underAttack ? Color.urgent : root.foreground
               accent: Color.urgent
               bordered: true
@@ -783,8 +819,10 @@ Panel {
 
             Button {
               text: "Purge cache"
-              tooltipText: "Purge everything for this zone (p)"
-              enabled: root.busyAction === ""
+              tooltipText: root.readOnly
+                           ? "Needs an API token — no cache-purge scope exists for wrangler to request"
+                           : "Purge everything for this zone (p)"
+              enabled: root.busyAction === "" && !root.readOnly
               foreground: root.foreground
               bordered: true
               onClicked: root.purgeConfirmOpen = true
@@ -990,7 +1028,7 @@ Panel {
             text: {
               var bits = []
               if (root.accountName !== "") bits.push(root.accountName)
-              if (root.tokenSource !== "") bits.push("token: " + root.tokenSource)
+              if (root.tokenLabel !== "") bits.push(root.tokenLabel)
               if (root.tokenMessage !== "") bits.push(root.tokenMessage)
               if (root.updatedAt) bits.push("updated " + Qt.formatDateTime(root.updatedAt, "HH:mm"))
               return bits.join("  ·  ")

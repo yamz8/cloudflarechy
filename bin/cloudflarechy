@@ -65,10 +65,60 @@ die() {
 
 # An API token, not the legacy global key: this plugin only ever needs a
 # handful of scopes, and a token can be minted with exactly those.
+#
+# Failing that, wrangler's OAuth credential works for everything this plugin
+# reads. It cannot work for anything it writes: the whole catalogue wrangler
+# can request (`wrangler login --scopes-list`) contains exactly one zone
+# scope, `zone:read`. There is no zone-settings-write and no cache-purge
+# scope to ask for, so read-only is the ceiling, not a precaution.
 TOKEN=""
 TOKEN_SOURCE=""
+TOKEN_KIND=""      # api | oauth
+TOKEN_EXPIRES=""   # ISO 8601, oauth only
+TOKEN_NOTE=""      # why a source that exists was passed over
+
+# Wrangler keeps its credential under XDG config; the pre-XDG location still
+# turns up on machines that have been upgraded rather than reinstalled.
+WRANGLER_CONFIGS=(
+  "${XDG_CONFIG_HOME:-$HOME/.config}/.wrangler/config/default.toml"
+  "$HOME/.wrangler/config/default.toml"
+)
+
+# Enough TOML for `key = "value"`, which is all wrangler writes here.
+toml_value() {
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" 2>/dev/null | head -1
+}
+
+# Read wrangler's token, but only while it is still valid. Wrangler refreshes
+# on use, and it owns that file — rotating its tokens from a bar widget would
+# race the tool itself and could cost the user their `wrangler` login. So an
+# expired session is reported, not repaired.
+load_wrangler_token() {
+  local file token expires expiry_epoch now
+  for file in "${WRANGLER_CONFIGS[@]}"; do
+    [[ -r $file ]] || continue
+    token=$(toml_value "$file" oauth_token)
+    [[ -n $token ]] || continue
+    expires=$(toml_value "$file" expiration_time)
+    if [[ -n $expires ]]; then
+      expiry_epoch=$(date -u -d "$expires" +%s 2>/dev/null) || expiry_epoch=""
+      now=$(date -u +%s)
+      if [[ -n $expiry_epoch ]] && (( expiry_epoch <= now )); then
+        TOKEN_NOTE="wrangler session expired"
+        continue
+      fi
+    fi
+    TOKEN="$token"
+    TOKEN_SOURCE="wrangler"
+    TOKEN_KIND="oauth"
+    TOKEN_EXPIRES="$expires"
+    return 0
+  done
+  return 1
+}
 
 load_token() {
+  TOKEN_KIND="api"
   if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
     TOKEN="$CLOUDFLARE_API_TOKEN"; TOKEN_SOURCE="CLOUDFLARE_API_TOKEN"; return 0
   fi
@@ -86,13 +136,32 @@ load_token() {
     TOKEN=$("$secret" lookup service cloudflarechy 2>/dev/null | tr -d '\r\n')
     if [[ -n $TOKEN ]]; then TOKEN_SOURCE="secret-tool"; return 0; fi
   fi
+  # Last, because an explicit token is a decision and this one is a leftover
+  # from some other afternoon's work.
+  load_wrangler_token && return 0
+  TOKEN_KIND=""
   return 1
+}
+
+readonly_credential() { [[ $TOKEN_KIND == oauth ]]; }
+
+# Writes stop here rather than at Cloudflare. A 9109 passed through from the
+# API tells the user nothing they can act on; this tells them exactly which
+# credential they are holding and what it would take to do the thing.
+require_write() {
+  readonly_credential || return 0
+  die "wrangler's credential is read-only" \
+      "Wrangler can only be granted zone:read — no zone-settings or cache-purge scope exists to request. Add an API token to use this."
 }
 
 require_token() {
   load_token && return 0
+  if [[ $TOKEN_NOTE == "wrangler session expired" ]]; then
+    die "wrangler session expired" \
+        "Run any wrangler command to refresh it, or save an API token to $(pretty_path "$TOKEN_FILE")."
+  fi
   die "no Cloudflare API token" \
-      "Create one at dash.cloudflare.com/profile/api-tokens and save it to $(pretty_path "$TOKEN_FILE") (chmod 600), or export CLOUDFLARE_API_TOKEN."
+      "Create one at dash.cloudflare.com/profile/api-tokens and save it to $(pretty_path "$TOKEN_FILE") (chmod 600), or export CLOUDFLARE_API_TOKEN. A `wrangler login` also works, read-only."
 }
 
 # ------------------------------------------------------------------- requests
@@ -182,27 +251,60 @@ cache_and_print() {
 # but it cannot read zones".
 cmd_status() {
   if ! load_token; then
+    if [[ $TOKEN_NOTE == "wrangler session expired" ]]; then
+      "$JQ" -n --arg file "$(pretty_path "$TOKEN_FILE")" '{
+        token: false, token_source: "wrangler", token_kind: "oauth",
+        expires_at: "", read_only: true, valid: false,
+        message: "wrangler session expired",
+        hint: ("Run any wrangler command to refresh it, or save an API token to " + $file + ".")
+      }'
+      return
+    fi
     "$JQ" -n --arg file "$(pretty_path "$TOKEN_FILE")" '{
-      token: false, token_source: "", valid: false,
+      token: false, token_source: "", token_kind: "",
+      expires_at: "", read_only: false, valid: false,
       message: "no API token",
-      hint: ("Save a Cloudflare API token to " + $file + " (chmod 600), or export CLOUDFLARE_API_TOKEN.")
+      hint: ("Save a Cloudflare API token to " + $file + " (chmod 600), export CLOUDFLARE_API_TOKEN, or run `wrangler login` for a read-only panel.")
     }'
     return
   fi
-  local raw err
-  raw=$(api GET /user/tokens/verify)
-  err=$(api_error "$raw")
-  if [[ -n $err ]]; then
-    "$JQ" -n --arg src "$TOKEN_SOURCE" --arg msg "$err" \
-      '{token: true, token_source: $src, valid: false, message: $msg}'
-    return
+
+  local raw err valid=false message=""
+  if [[ $TOKEN_KIND == oauth ]]; then
+    # /user/tokens/verify only validates API tokens — an OAuth credential gets
+    # "Invalid API Token" from it, which would be a lie. Ask instead whether
+    # this credential can do the job: read zones.
+    raw=$(api GET "/zones?per_page=1")
+    err=$(api_error "$raw")
+    if [[ -z $err ]]; then valid=true; message="active"; else message="$err"; fi
+  else
+    raw=$(api GET /user/tokens/verify)
+    err=$(api_error "$raw")
+    if [[ -n $err ]]; then
+      message="$err"
+    else
+      message=$("$JQ" -r '.result.status // ""' <<<"$raw")
+      [[ $message == active ]] && valid=true
+    fi
   fi
-  "$JQ" --arg src "$TOKEN_SOURCE" '{
-    token: true,
-    token_source: $src,
-    valid: ((.result.status // "") == "active"),
-    message: (.result.status // "")
-  }' <<<"$raw"
+
+  "$JQ" -n \
+    --arg src "$TOKEN_SOURCE" \
+    --arg kind "$TOKEN_KIND" \
+    --arg expires "$TOKEN_EXPIRES" \
+    --arg message "$message" \
+    --argjson valid "$valid" \
+    --argjson read_only "$(readonly_credential && echo true || echo false)" '{
+      token: true,
+      token_source: $src,
+      token_kind: $kind,
+      expires_at: $expires,
+      read_only: $read_only,
+      valid: $valid,
+      message: $message
+    } + (if $read_only then {
+      hint: "Wrangler can only be granted zone:read, so the switches stay off. Add an API token to use them."
+    } else {} end)'
 }
 
 # The zone list carries the account it belongs to, so tunnels and workers can
@@ -423,6 +525,7 @@ cmd_devmode() {
   [[ -n $zone ]] || die "devmode needs a zone id"
   [[ $value == on || $value == off ]] || die "devmode takes on or off"
   require_token
+  require_write
 
   local raw err
   raw=$(api PATCH "/zones/$zone/settings/development_mode" "$("$JQ" -n --arg v "$value" '{value: $v}')")
@@ -443,6 +546,7 @@ cmd_attack() {
   [[ -n $zone ]] || die "attack needs a zone id"
   [[ $value == on || $value == off ]] || die "attack takes on or off"
   require_token
+  require_write
 
   local previous_file="$STATE_DIR/security_level.$(cache_key "$zone")"
   local target=""
@@ -479,6 +583,7 @@ cmd_purge() {
   local zone="${1:-}"
   [[ -n $zone ]] || die "purge needs a zone id"
   require_token
+  require_write
 
   local raw err
   raw=$(api POST "/zones/$zone/purge_cache" '{"purge_everything":true}')

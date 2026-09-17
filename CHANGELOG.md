@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0
+
+- Fall back to wrangler's OAuth credential when no API token is configured, so
+  the panel works out of the box for anyone who has run `wrangler login`. It
+  covers every read — zones, 24h analytics, tunnels, Workers.
+- Mark such a session `READ-ONLY` and disable the three switches, because
+  wrangler's entire requestable scope catalogue holds one zone scope,
+  `zone:read`. Writes are refused in the script with a sentence naming the
+  credential, rather than passed through as a `9109` from the API.
+- Show the credential and its deadline in the footer
+  (`token: wrangler until 01:47`). An expired wrangler session is reported, not
+  repaired: this plugin does not own that config file and will not race
+  wrangler for it.
+- Probe token health per credential kind — `/user/tokens/verify` only validates
+  API tokens and answers `Invalid API Token` for an OAuth one.
+- Scale the traffic graph logarithmically. On real traffic a single crawl
+  flattened the other 23 hours onto the 1px floor; the graph is for shape, and
+  the exact figures above it are unaffected.
+
 ## 0.1.0
 
 First release.
