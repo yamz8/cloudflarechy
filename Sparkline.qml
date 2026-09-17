@@ -6,8 +6,22 @@ import qs.Commons
 // portion at its foot is the share Cloudflare served from cache, which is the
 // one comparison the numbers above cannot make hour by hour.
 //
-// Bars are scaled against the busiest hour in the window, not against an
-// absolute ceiling: a zone doing forty requests an hour deserves a shape too.
+// Bar heights are logarithmic, scaled against the busiest hour in the window
+// rather than an absolute ceiling.
+//
+// Real traffic forced this. A zone idling at 16 requests an hour took a
+// 3,016-request crawl at 07:00 — a 190x range. Linear scaling put every other
+// hour of the day on the 1px floor, including one at 18x the baseline, and a
+// square root only got the quiet hours to 7% of the height, which still draws
+// as a dash. What the reader needs from 24 bars in a popup is the shape: was
+// there a spike, was there a gap, is the rhythm normal. Linear answers only
+// the first question, and only when the answer is yes.
+//
+// log1p keeps zero at zero and preserves the ordering, so the spike is still
+// the tallest bar. It does flatten magnitude — 16 against 3,016 reads as a
+// third rather than a two-hundredth — which is why the exact figures sit
+// directly above this and are not derived from it. Numbers are for reading;
+// this is for glancing.
 Item {
   id: root
 
@@ -44,7 +58,8 @@ Item {
 
         readonly property real total: Number(modelData.requests || 0)
         readonly property real cached: Number(modelData.cached || 0)
-        readonly property real ratio: root.peak > 0 ? total / root.peak : 0
+        readonly property real ratio: root.peak > 0
+                                      ? Math.log1p(total) / Math.log1p(root.peak) : 0
 
         Rectangle {
           id: column
@@ -64,6 +79,9 @@ Item {
           Rectangle {
             anchors.bottom: parent.bottom
             width: parent.width
+            // Linear on purpose, unlike the bar height: this is the share of
+            // the hour that came from cache, and a proportion drawn inside its
+            // own bar should read as that proportion.
             height: parent.parent.total > 0
                     ? parent.height * (parent.parent.cached / parent.parent.total)
                     : 0
