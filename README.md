@@ -116,12 +116,13 @@ and the only way the bar dot stays honest while you are not looking.
 visitors, threats blocked, then one bar per hour. Each bar is that hour's
 requests; the filled part at its foot is the share that came from cache.
 
-Bar heights are logarithmic, scaled against the busiest hour in the window.
-Real traffic settled that: a zone idling at 16 requests an hour took a
-3,016-request crawl, and on a linear scale every other hour of the day — one of
-them 18x the baseline — collapsed into a flat line under the spike. The graph
-is there to show shape: a spike, a gap, the daily rhythm. The exact figures sit
-above it and are not derived from it.
+Bar heights are square-rooted, scaled against the busiest hour in the window.
+Two real shapes settled that. A zone idling at 16 requests an hour took a
+3,016-request crawl, and on a linear scale every other hour — one of them 18x
+the baseline — collapsed into a flat line under the spike. A logarithm fixes
+that day and ruins every ordinary one, drawing a normal 3x variation as a wall
+of identical bars. Square root survives both. The graph is there to show shape;
+the exact figures sit above it and are not derived from it.
 
 `visitors` shows `—` rather than `0` when the plan does not expose uniques —
 those are different facts.

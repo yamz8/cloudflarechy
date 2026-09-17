@@ -6,22 +6,28 @@ import qs.Commons
 // portion at its foot is the share Cloudflare served from cache, which is the
 // one comparison the numbers above cannot make hour by hour.
 //
-// Bar heights are logarithmic, scaled against the busiest hour in the window
+// Bar heights are square-rooted, scaled against the busiest hour in the window
 // rather than an absolute ceiling.
 //
-// Real traffic forced this. A zone idling at 16 requests an hour took a
-// 3,016-request crawl at 07:00 — a 190x range. Linear scaling put every other
-// hour of the day on the 1px floor, including one at 18x the baseline, and a
-// square root only got the quiet hours to 7% of the height, which still draws
-// as a dash. What the reader needs from 24 bars in a popup is the shape: was
-// there a spike, was there a gap, is the rhythm normal. Linear answers only
-// the first question, and only when the answer is yes.
+// The scale was chosen against two real shapes, because each one breaks a
+// different curve:
 //
-// log1p keeps zero at zero and preserves the ordering, so the spike is still
-// the tallest bar. It does flatten magnitude — 16 against 3,016 reads as a
-// third rather than a two-hundredth — which is why the exact figures sit
-// directly above this and are not derived from it. Numbers are for reading;
-// this is for glancing.
+//   spiky   a zone idling at 16 requests an hour took a 3,016-request crawl,
+//           a 190x range. Linear puts all 23 other hours on the 1px floor —
+//           including one at 18x the baseline — leaving one bar over a flat
+//           line.
+//   ordinary a normal day varying maybe 3x between its quiet and busy hours.
+//           log1p renders that as a wall of near-identical full-height bars,
+//           because it compresses 3x to 0.84. Nothing to see, every day.
+//
+// Square root is the one that survives both: the ordinary day keeps visible
+// variation (3x becomes 0.57), and the spiky day still reads as quiet baseline,
+// one medium event, one crawl. It gives up telling 15 requests from 18 at the
+// bottom of the range, which is not a distinction anyone opens a bar widget to
+// make. Zero stays zero and the ordering never changes.
+//
+// Exact magnitudes are printed above in figures and are not derived from these
+// bars. Numbers are for reading; this is for glancing.
 Item {
   id: root
 
@@ -59,7 +65,7 @@ Item {
         readonly property real total: Number(modelData.requests || 0)
         readonly property real cached: Number(modelData.cached || 0)
         readonly property real ratio: root.peak > 0
-                                      ? Math.log1p(total) / Math.log1p(root.peak) : 0
+                                      ? Math.sqrt(total) / Math.sqrt(root.peak) : 0
 
         Rectangle {
           id: column

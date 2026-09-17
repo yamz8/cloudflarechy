@@ -15,9 +15,10 @@
   wrangler for it.
 - Probe token health per credential kind — `/user/tokens/verify` only validates
   API tokens and answers `Invalid API Token` for an OAuth one.
-- Scale the traffic graph logarithmically. On real traffic a single crawl
-  flattened the other 23 hours onto the 1px floor; the graph is for shape, and
-  the exact figures above it are unaffected.
+- Scale the traffic graph by square root. On real traffic a single crawl
+  flattened the other 23 hours onto the 1px floor under linear scaling, while a
+  logarithm draws an ordinary day as a wall of identical bars. The graph is for
+  shape, and the exact figures above it are unaffected.
 
 ## 0.1.0
 
