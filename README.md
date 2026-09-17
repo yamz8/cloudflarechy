@@ -41,6 +41,8 @@ screen with two routes:
 - **Paste an API token** — adds the switches and a bar dot you can trust
   overnight.
 
+![The Connect screen](connect.png)
+
 Either can be changed later: the key icon in the panel header (or `c`) reopens
 that screen, so a wrangler session can be upgraded to a token whenever you like,
 and a saved token can be forgotten to fall back to wrangler.
