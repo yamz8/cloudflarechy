@@ -128,7 +128,11 @@ Panel {
   readonly property color dim: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color brand: "#f6821f"
-  readonly property int panelContentWidth: Style.space(460)
+  // The width every first-party popup uses — bluetooth, network, audio,
+  // monitor, power, tailscale, agents, dropbox. The clock is wider because a
+  // month grid needs it; nothing here does, and a bar full of popups that
+  // each pick their own width looks like an accident.
+  readonly property int panelContentWidth: Style.space(380)
 
   // One number and what it counts. Five of these share a row, so the value
   // carries the weight and the label stays out of its way.
