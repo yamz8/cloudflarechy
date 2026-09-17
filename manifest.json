@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cloudflarechy",
   "name": "Cloudflarechy",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "yamz8",
   "license": "MIT",
   "description": "One Cloudflare zone from the Omarchy bar: 24h traffic, cache ratio, tunnels, and the two switches you forget to turn off",
@@ -24,7 +24,8 @@
       "refreshSeconds": 300,
       "showTunnels": true,
       "showWorkers": true,
-      "attentionDot": true
+      "attentionDot": true,
+      "errorPercent": 5
     },
     "schema": [
       {
@@ -49,14 +50,14 @@
         "type": "boolean",
         "label": "Show Cloudflare Tunnels",
         "defaultValue": true,
-        "description": "Needs Account → Cloudflare Tunnel → Read on the token."
+        "description": "Needs Account \u2192 Cloudflare Tunnel \u2192 Read on the token."
       },
       {
         "key": "showWorkers",
         "type": "boolean",
         "label": "Show recent Workers",
         "defaultValue": true,
-        "description": "Needs Account → Workers Scripts → Read on the token."
+        "description": "Needs Account \u2192 Workers Scripts \u2192 Read on the token."
       },
       {
         "key": "attentionDot",
@@ -64,6 +65,16 @@
         "label": "Colour the bar icon when something needs attention",
         "defaultValue": true,
         "description": "Turns the mark the theme's urgent colour and adds a dot when Development Mode or Under Attack Mode is on, or a tunnel is down or degraded. Off keeps the bar quiet."
+      },
+      {
+        "key": "errorPercent",
+        "type": "integer",
+        "label": "5xx rate that lights the bar icon (%)",
+        "min": 0,
+        "max": 100,
+        "step": 1,
+        "defaultValue": 5,
+        "description": "Share of requests answering 5xx before the icon changes colour. Also needs at least 20 of them, so a quiet hour cannot trip it on a handful of requests. 0 lights on any."
       }
     ]
   }

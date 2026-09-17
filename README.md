@@ -11,7 +11,8 @@ That last part is why the bar icon changes colour. Both of those switches are
 meant to be temporary, neither is visible from the desktop, and both get left on
 for days — so the whole mark turns your theme's urgent colour and grows a dot,
 rather than whispering it in five pixels. The same happens when a Cloudflare
-Tunnel is `down` or `degraded`.
+Tunnel is `down` or `degraded`, or when the zone starts answering 5xx at a rate
+worth looking at. Hovering the icon says which.
 
 Everything shown comes from the Cloudflare API. Nothing is computed locally
 except the cache ratio, which is cached ÷ total over the same 24 hours.
@@ -212,6 +213,7 @@ own settings UI:
 | `showTunnels` | `true` | Show the tunnels section. |
 | `showWorkers` | `true` | Show the Workers section. |
 | `attentionDot` | `true` | Colour the bar icon, and add a dot, when something needs attention. Off keeps the bar quiet. |
+| `errorPercent` | `5` | Share of requests answering 5xx before the icon lights. Needs 20+ of them as well, so a quiet hour cannot trip it. |
 
 ## From the command line
 

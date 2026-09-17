@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- The bar icon also lights when the zone is answering 5xx above a threshold,
+  not only when a switch was left on or a tunnel is down. A zone can be failing
+  with nothing switched on, and that is worth opening the panel for. Default 5%
+  of requests, with a floor of 20 errors so a quiet hour cannot trip it on a
+  handful of requests; `errorPercent` tunes it.
+- Hovering the bar icon now says which of those reasons applies, so the colour
+  is never a riddle.
+
 ## 0.5.0
 
 - The bar icon now turns the theme's urgent colour when Development Mode or

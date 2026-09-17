@@ -41,6 +41,10 @@ Panel {
   readonly property bool showTunnels: root.setting("showTunnels", true) === true
   readonly property bool showWorkers: root.setting("showWorkers", true) === true
   readonly property bool attentionDot: root.setting("attentionDot", true) === true
+  // Percent of requests answering 5xx before the bar says so. The agents
+  // widget draws the same line at 90% of a token limit: one threshold, one
+  // colour, no gradient nobody can read at 16px.
+  readonly property real errorThreshold: Math.max(0, Number(root.setting("errorPercent", 5))) / 100
 
   // --- what came back ------------------------------------------------------
   property var zones: []
@@ -120,10 +124,22 @@ Panel {
     return n
   }
 
-  // What the dot on the bar icon means: something is switched on that was
-  // meant to be temporary, or a tunnel is not carrying traffic.
+  // A zone can be failing without anything being switched on, and that is
+  // worth opening the panel for too. Guarded by an absolute floor as well as a
+  // rate: three 5xx out of four requests at 4am is a true 75% and not news.
+  readonly property bool errorRateAlarming: {
+    if (!root.analytics || root.analytics.statuses_known !== true) return false
+    var errors = Number(root.analytics.server_errors || 0)
+    if (errors < 20) return false
+    return Number(root.analytics.error_ratio || 0) >= root.errorThreshold
+  }
+
+  // What the bar icon's colour means: something is switched on that was meant
+  // to be temporary, a tunnel is not carrying traffic, or the zone is serving
+  // errors at a rate worth looking at.
   readonly property bool attention: root.devMode || root.underAttack
                                     || root.troubledTunnels > 0
+                                    || root.errorRateAlarming
 
   // The bar's own alert colour, which themes set and the first-party widgets
   // use — network turns its glyph this colour when pings drop. A plugin that
@@ -649,6 +665,19 @@ Panel {
           anchors.topMargin: -Style.space(1)
         }
       }
+    }
+
+    tooltipText: {
+      if (!root.attention) return ""
+      var reasons = []
+      if (root.devMode) reasons.push("Development Mode on, " + root.shortDuration(root.devModeSeconds) + " left")
+      if (root.underAttack) reasons.push("Under Attack Mode on")
+      if (root.troubledTunnels > 0)
+        reasons.push(root.troubledTunnels
+                     + (root.troubledTunnels === 1 ? " tunnel needs attention" : " tunnels need attention"))
+      if (root.errorRateAlarming)
+        reasons.push(root.percent(root.analytics.error_ratio) + " of requests are 5xx")
+      return reasons.join("  ·  ")
     }
 
     onPressed: function(mouseButton) {
