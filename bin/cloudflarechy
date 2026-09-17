@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+# Data bridge between the Omarchy shell and the Cloudflare API.
+#
+# Every subcommand writes exactly one JSON object to stdout and leaves
+# diagnostics on stderr, so a QML Process can parse stdout without filtering.
+# Failures are data too: they come back as {"error": "...", "hint": "..."} with
+# exit 0, because a panel that can render the reason is more useful than a
+# non-zero exit the shell would have to guess at.
+#
+#   cloudflarechy status
+#   cloudflarechy zones
+#   cloudflarechy overview <zone-id>
+#   cloudflarechy tunnels <account-id>
+#   cloudflarechy workers <account-id>
+#   cloudflarechy devmode <zone-id> on|off
+#   cloudflarechy attack  <zone-id> on|off
+#   cloudflarechy purge   <zone-id>
+#
+# A leading --fresh bypasses the read cache, which is what the panel's manual
+# refresh uses.
+set -uo pipefail
+
+# Overridable so the request paths can be exercised against a local stand-in
+# without a real account; nothing but tests should ever set it.
+API="${CLOUDFLARECHY_API_BASE:-https://api.cloudflare.com/client/v4}"
+
+# Quickshell does not inherit an interactive shell's PATH, so tools installed
+# outside /usr/bin are invisible unless we look for them.
+resolve() {
+  local name="$1" p
+  p=$(command -v "$name" 2>/dev/null) && [[ -n $p ]] && { echo "$p"; return 0; }
+  for p in /usr/bin/"$name" /usr/local/bin/"$name" "$HOME/.local/bin/$name" \
+           "$HOME/.local/share/mise/shims/$name"; do
+    [[ -x $p ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+
+CURL=$(resolve curl) || { printf '{"error":"curl not found"}\n'; exit 0; }
+JQ=$(resolve jq)     || { printf '{"error":"jq not found"}\n'; exit 0; }
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cloudflarechy"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cloudflarechy"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cloudflarechy"
+TOKEN_FILE="${CLOUDFLARECHY_TOKEN_FILE:-$CONFIG_DIR/token}"
+
+# Hints are read by a person, so paths in them are written the way that person
+# would type them.
+pretty_path() {
+  local path="$1"
+  [[ $path == "$HOME"/* ]] && { printf '~%s' "${path#"$HOME"}"; return; }
+  printf '%s' "$path"
+}
+
+NO_CACHE="${CLOUDFLARECHY_NO_CACHE:-0}"
+if [[ ${1:-} == --fresh ]]; then NO_CACHE=1; shift; fi
+
+die() {
+  "$JQ" -n --arg e "$1" --arg h "${2:-}" \
+    '{error: $e} + (if $h == "" then {} else {hint: $h} end)'
+  exit 0
+}
+
+# ------------------------------------------------------------------ the token
+
+# An API token, not the legacy global key: this plugin only ever needs a
+# handful of scopes, and a token can be minted with exactly those.
+TOKEN=""
+TOKEN_SOURCE=""
+
+load_token() {
+  if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
+    TOKEN="$CLOUDFLARE_API_TOKEN"; TOKEN_SOURCE="CLOUDFLARE_API_TOKEN"; return 0
+  fi
+  if [[ -n ${CF_API_TOKEN:-} ]]; then
+    TOKEN="$CF_API_TOKEN"; TOKEN_SOURCE="CF_API_TOKEN"; return 0
+  fi
+  if [[ -r $TOKEN_FILE ]]; then
+    # Trim whitespace and any trailing newline: a token saved with a plain
+    # editor picks one up, and the API rejects it with an unhelpful 400.
+    TOKEN=$(tr -d '\r\n[:space:]' < "$TOKEN_FILE")
+    if [[ -n $TOKEN ]]; then TOKEN_SOURCE=$(pretty_path "$TOKEN_FILE"); return 0; fi
+  fi
+  local secret
+  if secret=$(resolve secret-tool); then
+    TOKEN=$("$secret" lookup service cloudflarechy 2>/dev/null | tr -d '\r\n')
+    if [[ -n $TOKEN ]]; then TOKEN_SOURCE="secret-tool"; return 0; fi
+  fi
+  return 1
+}
+
+require_token() {
+  load_token && return 0
+  die "no Cloudflare API token" \
+      "Create one at dash.cloudflare.com/profile/api-tokens and save it to $(pretty_path "$TOKEN_FILE") (chmod 600), or export CLOUDFLARE_API_TOKEN."
+}
+
+# ------------------------------------------------------------------- requests
+
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  local -a args=(-sS --max-time 20 -X "$method"
+                 -H "Authorization: Bearer $TOKEN"
+                 -H "Content-Type: application/json")
+  [[ -n $body ]] && args+=(--data-binary "$body")
+  "$CURL" "${args[@]}" "$API$path" 2>/dev/null
+}
+
+# Cloudflare answers 4xx with a JSON envelope that names the missing scope, so
+# the body is worth more than the status line — hence no curl -f anywhere here.
+api_error() {
+  local raw="$1"
+  [[ -z $raw ]] && { echo "no response from api.cloudflare.com"; return 0; }
+  "$JQ" -r '
+    if type != "object" then "unreadable response from api.cloudflare.com"
+    elif (.success == true) then ""
+    else ((.errors // []) | map(.message // empty) | join("; "))
+         | if . == "" then "request failed" else . end
+    end' <<<"$raw" 2>/dev/null || echo "unreadable response from api.cloudflare.com"
+}
+
+# GraphQL is a separate endpoint with a separate error shape: HTTP 200 with a
+# top-level `errors` array and `data: null`.
+gql() {
+  local query="$1" variables="$2" body
+  body=$("$JQ" -n --arg q "$query" --argjson v "$variables" '{query: $q, variables: $v}')
+  "$CURL" -sS --max-time 25 -X POST \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data-binary "$body" "$API/graphql" 2>/dev/null
+}
+
+gql_error() {
+  local raw="$1"
+  [[ -z $raw ]] && { echo "no response from api.cloudflare.com"; return 0; }
+  "$JQ" -r '
+    if type != "object" then "unreadable response from api.cloudflare.com"
+    elif ((.errors // []) | length) > 0
+      then ((.errors // []) | map(.message // empty) | join("; "))
+    elif (.data == null) then "analytics returned no data"
+    else "" end' <<<"$raw" 2>/dev/null || echo "unreadable response from api.cloudflare.com"
+}
+
+# ---------------------------------------------------------------- read cache
+
+# Analytics is the expensive call and the panel polls it, so answers are held
+# briefly on disk. Writes (purge, dev mode, under attack) drop the cache for
+# the zone they touched rather than waiting it out.
+cache_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9._-' '_'; }
+
+cache_read() {
+  local f="$CACHE_DIR/$(cache_key "$1")" ttl="$2" age
+  [[ $NO_CACHE == 1 ]] && return 1
+  [[ -r $f ]] || return 1
+  age=$(( $(date +%s) - $(stat -c %Y "$f" 2>/dev/null || echo 0) ))
+  (( age >= 0 && age <= ttl )) || return 1
+  cat "$f"
+}
+
+cache_write() {
+  local f="$CACHE_DIR/$(cache_key "$1")"
+  mkdir -p "$CACHE_DIR" 2>/dev/null || { cat >/dev/null; return 0; }
+  cat > "$f"
+}
+
+cache_drop() { rm -f "$CACHE_DIR/$(cache_key "$1")" 2>/dev/null; return 0; }
+
+# Reads take this path: the payload is printed for the shell either way, and
+# cached only when it parsed as JSON — a truncated answer is worth nothing on
+# the next open.
+cache_and_print() {
+  local key="$1" payload
+  payload=$(cat)
+  printf '%s\n' "$payload"
+  "$JQ" -e . >/dev/null 2>&1 <<<"$payload" && cache_write "$key" <<<"$payload"
+  return 0
+}
+
+# ------------------------------------------------------------------ commands
+
+# Token health without needing any scope: /user/tokens/verify works for every
+# token, so a panel can tell "no token" from "token expired" from "token fine,
+# but it cannot read zones".
+cmd_status() {
+  if ! load_token; then
+    "$JQ" -n --arg file "$(pretty_path "$TOKEN_FILE")" '{
+      token: false, token_source: "", valid: false,
+      message: "no API token",
+      hint: ("Save a Cloudflare API token to " + $file + " (chmod 600), or export CLOUDFLARE_API_TOKEN.")
+    }'
+    return
+  fi
+  local raw err
+  raw=$(api GET /user/tokens/verify)
+  err=$(api_error "$raw")
+  if [[ -n $err ]]; then
+    "$JQ" -n --arg src "$TOKEN_SOURCE" --arg msg "$err" \
+      '{token: true, token_source: $src, valid: false, message: $msg}'
+    return
+  fi
+  "$JQ" --arg src "$TOKEN_SOURCE" '{
+    token: true,
+    token_source: $src,
+    valid: ((.result.status // "") == "active"),
+    message: (.result.status // "")
+  }' <<<"$raw"
+}
+
+# The zone list carries the account it belongs to, so tunnels and workers can
+# be fetched without a separate Account:Read call.
+cmd_zones() {
+  require_token
+  local cached raw err
+  if cached=$(cache_read "zones.json" 300); then printf '%s\n' "$cached"; return; fi
+
+  raw=$(api GET "/zones?per_page=50&order=name&direction=asc")
+  err=$(api_error "$raw")
+  if [[ -n $err ]]; then
+    die "$err" "The token needs Zone → Zone → Read."
+  fi
+  "$JQ" '{
+    zones: [ (.result // [])[] | {
+      id:               .id,
+      name:             .name,
+      status:           (.status // ""),
+      paused:           (.paused // false),
+      plan:             (.plan.name // ""),
+      development_mode: (.development_mode // 0),
+      account_id:       (.account.id // ""),
+      account_name:     (.account.name // "")
+    } ]
+  }' <<<"$raw" | cache_and_print "zones.json"
+}
+
+# One zone, everything the panel shows above the fold: what the zone is, the
+# two switches, and 24 hours of traffic.
+cmd_overview() {
+  local zone="${1:-}"
+  [[ -n $zone ]] || die "overview needs a zone id"
+  require_token
+
+  local cached
+  if cached=$(cache_read "overview.$zone.json" 60); then printf '%s\n' "$cached"; return; fi
+
+  local zraw zerr
+  zraw=$(api GET "/zones/$zone")
+  zerr=$(api_error "$zraw")
+  [[ -n $zerr ]] && die "$zerr" "The token needs Zone → Zone → Read."
+
+  # Security level lives behind Zone Settings, which a read-only token may not
+  # carry. Missing it costs the Under Attack switch, not the whole panel.
+  local sraw serr level
+  sraw=$(api GET "/zones/$zone/settings/security_level")
+  serr=$(api_error "$sraw")
+  if [[ -n $serr ]]; then
+    level=""
+  else
+    level=$("$JQ" -r '.result.value // ""' <<<"$sraw")
+  fi
+
+  local analytics analytics_error
+  analytics=$(zone_analytics "$zone")
+  analytics_error=$("$JQ" -r '.error // ""' <<<"$analytics")
+
+  "$JQ" -n \
+    --argjson zone "$zraw" \
+    --argjson analytics "$analytics" \
+    --arg level "$level" \
+    --arg level_error "$serr" \
+    --arg analytics_error "$analytics_error" '
+    ($zone.result // {}) as $z | {
+      zone: {
+        id:               ($z.id // ""),
+        name:             ($z.name // ""),
+        status:           ($z.status // ""),
+        paused:           ($z.paused // false),
+        plan:             ($z.plan.name // ""),
+        development_mode: ($z.development_mode // 0),
+        account_id:       ($z.account.id // ""),
+        account_name:     ($z.account.name // "")
+      },
+      security_level: $level,
+      security_level_error: $level_error,
+      under_attack: ($level == "under_attack"),
+      analytics: ($analytics | del(.error)),
+      analytics_error: $analytics_error
+    }' | cache_and_print "overview.$zone.json"
+}
+
+# 24 hourly buckets from the GraphQL Analytics API. The REST dashboard endpoint
+# it replaced is gone for new zones, and this is the one dataset every plan
+# can read.
+zone_analytics() {
+  local zone="$1" since till raw err
+  since=$(date -u -d '-23 hours' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  till=$(date -u -d '+1 hour' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  if [[ -z $since || -z $till ]]; then
+    "$JQ" -n '{error: "could not compute a time window (needs GNU date)"}'
+    return
+  fi
+
+  local vars
+  vars=$("$JQ" -n --arg z "$zone" --arg s "$since" --arg u "$till" \
+    '{zone: $z, since: $s, until: $u}')
+
+  raw=$(gql "$(analytics_query with_uniques)" "$vars")
+  err=$(gql_error "$raw")
+  # `uniq { uniques }` is not readable on every plan, and GraphQL fails the
+  # whole query over one unavailable field — so drop it and ask again rather
+  # than reporting no traffic at all.
+  if [[ -n $err ]]; then
+    local retry retry_err
+    retry=$(gql "$(analytics_query plain)" "$vars")
+    retry_err=$(gql_error "$retry")
+    if [[ -z $retry_err ]]; then raw="$retry"; err=""; fi
+  fi
+
+  if [[ -n $err ]]; then
+    "$JQ" -n --arg e "$err" '{
+      error: $e, requests: 0, cached_requests: 0, bytes: 0, cached_bytes: 0,
+      threats: 0, uniques: 0, cache_ratio: 0, series: [], uniques_known: false
+    }'
+    return
+  fi
+
+  "$JQ" '
+    ((.data.viewer.zones // [])[0].httpRequests1hGroups // []) as $g
+    | ([$g[] | .sum.requests // 0]       | add // 0) as $requests
+    | ([$g[] | .sum.cachedRequests // 0] | add // 0) as $cached
+    | {
+        requests:        $requests,
+        cached_requests: $cached,
+        bytes:           ([$g[] | .sum.bytes // 0]       | add // 0),
+        cached_bytes:    ([$g[] | .sum.cachedBytes // 0] | add // 0),
+        threats:         ([$g[] | .sum.threats // 0]     | add // 0),
+        uniques:         ([$g[] | .uniq.uniques // 0]    | add // 0),
+        uniques_known:   ([$g[] | .uniq.uniques // null] | map(select(. != null)) | length) > 0,
+        cache_ratio:     (if $requests > 0 then ($cached / $requests) else 0 end),
+        series: [ $g[] | {
+          t:        (.dimensions.datetime // ""),
+          requests: (.sum.requests // 0),
+          cached:   (.sum.cachedRequests // 0),
+          threats:  (.sum.threats // 0),
+          bytes:    (.sum.bytes // 0)
+        } ]
+      }' <<<"$raw"
+}
+
+analytics_query() {
+  local uniq=""
+  [[ ${1:-} == with_uniques ]] && uniq="uniq { uniques }"
+  cat <<QUERY
+query (\$zone: String!, \$since: Time!, \$until: Time!) {
+  viewer {
+    zones(filter: {zoneTag: \$zone}) {
+      httpRequests1hGroups(
+        limit: 24
+        orderBy: [datetime_ASC]
+        filter: {datetime_geq: \$since, datetime_lt: \$until}
+      ) {
+        dimensions { datetime }
+        sum { requests bytes cachedRequests cachedBytes threats }
+        $uniq
+      }
+    }
+  }
+}
+QUERY
+}
+
+cmd_tunnels() {
+  local account="${1:-}"
+  [[ -n $account ]] || die "tunnels needs an account id"
+  require_token
+
+  local cached raw err
+  if cached=$(cache_read "tunnels.$account.json" 60); then printf '%s\n' "$cached"; return; fi
+
+  raw=$(api GET "/accounts/$account/cfd_tunnel?is_deleted=false&per_page=50")
+  err=$(api_error "$raw")
+  if [[ -n $err ]]; then
+    "$JQ" -n --arg e "$err" '{tunnels: [], error: $e, hint: "The token needs Account → Cloudflare Tunnel → Read."}'
+    return
+  fi
+  # status is one of inactive / degraded / healthy / down.
+  "$JQ" '{
+    tunnels: [ (.result // [])[] | {
+      id:          .id,
+      name:        (.name // ""),
+      status:      (.status // "inactive"),
+      connections: ((.connections // []) | length),
+      created_at:  (.created_at // "")
+    } ]
+  }' <<<"$raw" | cache_and_print "tunnels.$account.json"
+}
+
+cmd_workers() {
+  local account="${1:-}"
+  [[ -n $account ]] || die "workers needs an account id"
+  require_token
+
+  local cached raw err
+  if cached=$(cache_read "workers.$account.json" 300); then printf '%s\n' "$cached"; return; fi
+
+  raw=$(api GET "/accounts/$account/workers/scripts?per_page=50")
+  err=$(api_error "$raw")
+  if [[ -n $err ]]; then
+    "$JQ" -n --arg e "$err" '{workers: [], error: $e, hint: "The token needs Account → Workers Scripts → Read."}'
+    return
+  fi
+  "$JQ" '{
+    workers: [ (.result // [])[] | {
+      name:        (.id // ""),
+      modified_on: (.modified_on // ""),
+      placement:   (.placement_mode // "")
+    } ] | sort_by(.modified_on) | reverse
+  }' <<<"$raw" | cache_and_print "workers.$account.json"
+}
+
+# ------------------------------------------------------------------- writes
+
+cmd_devmode() {
+  local zone="${1:-}" value="${2:-}"
+  [[ -n $zone ]] || die "devmode needs a zone id"
+  [[ $value == on || $value == off ]] || die "devmode takes on or off"
+  require_token
+
+  local raw err
+  raw=$(api PATCH "/zones/$zone/settings/development_mode" "$("$JQ" -n --arg v "$value" '{value: $v}')")
+  err=$(api_error "$raw")
+  [[ -n $err ]] && die "$err" "The token needs Zone → Zone Settings → Edit."
+
+  cache_drop "overview.$zone.json"
+  cache_drop "zones.json"
+  "$JQ" '{ok: true, value: (.result.value // ""), time_remaining: (.result.time_remaining // 0)}' <<<"$raw"
+}
+
+# Under Attack is a security_level value, not a switch of its own, so turning it
+# off has to restore something. The level in force before it was raised is kept
+# here; without that record "off" would silently rewrite the zone to whatever
+# default this plugin picked.
+cmd_attack() {
+  local zone="${1:-}" value="${2:-}"
+  [[ -n $zone ]] || die "attack needs a zone id"
+  [[ $value == on || $value == off ]] || die "attack takes on or off"
+  require_token
+
+  local previous_file="$STATE_DIR/security_level.$(cache_key "$zone")"
+  local target=""
+
+  if [[ $value == on ]]; then
+    local craw cerr current
+    craw=$(api GET "/zones/$zone/settings/security_level")
+    cerr=$(api_error "$craw")
+    [[ -n $cerr ]] && die "$cerr" "The token needs Zone → Zone Settings → Read."
+    current=$("$JQ" -r '.result.value // ""' <<<"$craw")
+    if [[ -n $current && $current != under_attack ]]; then
+      mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$current" > "$previous_file"
+    fi
+    target="under_attack"
+  else
+    target="medium"
+    if [[ -r $previous_file ]]; then
+      local saved
+      saved=$(tr -d '\r\n[:space:]' < "$previous_file")
+      [[ -n $saved && $saved != under_attack ]] && target="$saved"
+    fi
+  fi
+
+  local raw err
+  raw=$(api PATCH "/zones/$zone/settings/security_level" "$("$JQ" -n --arg v "$target" '{value: $v}')")
+  err=$(api_error "$raw")
+  [[ -n $err ]] && die "$err" "The token needs Zone → Zone Settings → Edit."
+
+  cache_drop "overview.$zone.json"
+  "$JQ" --arg restored "$target" '{ok: true, value: (.result.value // $restored)}' <<<"$raw"
+}
+
+cmd_purge() {
+  local zone="${1:-}"
+  [[ -n $zone ]] || die "purge needs a zone id"
+  require_token
+
+  local raw err
+  raw=$(api POST "/zones/$zone/purge_cache" '{"purge_everything":true}')
+  err=$(api_error "$raw")
+  [[ -n $err ]] && die "$err" "The token needs Zone → Cache Purge → Purge."
+
+  cache_drop "overview.$zone.json"
+  "$JQ" -n '{ok: true, purged: "everything"}'
+}
+
+# ---------------------------------------------------------------- dispatch
+
+case "${1:-status}" in
+  status)   cmd_status ;;
+  zones)    cmd_zones ;;
+  overview) shift; cmd_overview "$@" ;;
+  tunnels)  shift; cmd_tunnels "$@" ;;
+  workers)  shift; cmd_workers "$@" ;;
+  devmode)  shift; cmd_devmode "$@" ;;
+  attack)   shift; cmd_attack "$@" ;;
+  purge)    shift; cmd_purge "$@" ;;
+  -h|--help|help)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *) die "unknown command: ${1:-}" "Run cloudflarechy --help" ;;
+esac

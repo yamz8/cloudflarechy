@@ -1,0 +1,5 @@
+*.bak
+*.bak.*
+
+# Claude Code's per-machine plugin toggles, not part of this plugin.
+.claude/settings.local.json

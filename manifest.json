@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "cloudflarechy",
+  "name": "Cloudflarechy",
+  "version": "0.1.0",
+  "author": "yamz8",
+  "license": "MIT",
+  "description": "One Cloudflare zone from the Omarchy bar: 24h traffic, cache ratio, tunnels, and the two switches you forget to turn off",
+  "kinds": [
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "Cloudflarechy.qml"
+  },
+  "barWidget": {
+    "displayName": "Cloudflarechy",
+    "description": "Cloudflare zone traffic, cache, tunnels and workers",
+    "category": "Plugin",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": {
+      "zone": "",
+      "refreshSeconds": 300,
+      "showTunnels": true,
+      "showWorkers": true,
+      "attentionDot": true
+    },
+    "schema": [
+      {
+        "key": "zone",
+        "type": "string",
+        "label": "Zone",
+        "defaultValue": "",
+        "description": "The domain to show, e.g. example.com. Leave empty to use the first zone the token can read."
+      },
+      {
+        "key": "refreshSeconds",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 60,
+        "defaultValue": 300,
+        "description": "How often the widget polls Cloudflare in the background. The bar dot is only as fresh as this."
+      },
+      {
+        "key": "showTunnels",
+        "type": "boolean",
+        "label": "Show Cloudflare Tunnels",
+        "defaultValue": true,
+        "description": "Needs Account → Cloudflare Tunnel → Read on the token."
+      },
+      {
+        "key": "showWorkers",
+        "type": "boolean",
+        "label": "Show recent Workers",
+        "defaultValue": true,
+        "description": "Needs Account → Workers Scripts → Read on the token."
+      },
+      {
+        "key": "attentionDot",
+        "type": "boolean",
+        "label": "Dot on the bar icon when something needs attention",
+        "defaultValue": true,
+        "description": "Development Mode on, Under Attack Mode on, or a tunnel down or degraded."
+      }
+    ]
+  }
+}
