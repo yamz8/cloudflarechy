@@ -17,19 +17,28 @@ except the cache ratio, which is cached ÷ total over the same 24 hours.
 
 ## Install
 
-The plugin lives in `~/.config/omarchy/plugins/cloudflarechy/`. Put it on the
-bar with:
+```bash
+omarchy plugin add https://github.com/yamz8/cloudflarechy --enable
+```
+
+That clones it, validates the manifest, and offers to place it on the bar. It
+lands in `~/.config/omarchy/plugins/cloudflarechy/` — the directory is named
+from the manifest id, not the repository. Later, `omarchy plugin update
+cloudflarechy` pulls new versions.
+
+Already on disk, and you only want it on the bar:
 
 ```bash
 omarchy plugin enable cloudflarechy --section right
+omarchy bar move cloudflarechy --after omarchy.tray   # somewhere else in the row
 ```
-
-`omarchy bar put cloudflarechy --section right` does the same thing for a
-widget that is already enabled, and `omarchy bar move cloudflarechy --after
-omarchy.tray` puts it somewhere else in the row.
 
 Then give it a token (below). Without one the panel says `not connected` and
 explains what to do.
+
+Plugins are unsandboxed code in your long-lived shell process, so read
+`bin/cloudflarechy` and the QML before you install this — it is about 500 lines
+of bash and some QML, and all the network calls are in the one script.
 
 ## The API token
 
