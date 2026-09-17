@@ -8,6 +8,9 @@
 # non-zero exit the shell would have to guess at.
 #
 #   cloudflarechy status
+#   cloudflarechy setup            what credentials this machine could use
+#   cloudflarechy save-token       reads the token on stdin, checks it, saves it
+#   cloudflarechy forget-token
 #   cloudflarechy zones
 #   cloudflarechy overview <zone-id>
 #   cloudflarechy tunnels <account-id>
@@ -518,6 +521,117 @@ cmd_workers() {
   }' <<<"$raw" | cache_and_print "workers.$account.json"
 }
 
+# ---------------------------------------------------------------- setting up
+
+# What routes to a credential exist on this machine. The panel's setup screen
+# is built from this rather than from guesses, so it never offers a wrangler
+# button on a box with no wrangler and no node to run one.
+cmd_setup() {
+  local wrangler_cli npx_cli wrangler_cmd="" session="none" expires="" env_var="" file_present=false keyring=false
+  wrangler_cli=$(resolve wrangler || true)
+  npx_cli=$(resolve npx || true)
+  if [[ -n $wrangler_cli ]]; then
+    wrangler_cmd="wrangler login"
+  elif [[ -n $npx_cli ]]; then
+    wrangler_cmd="npx --yes wrangler@latest login"
+  fi
+
+  local file token expiry_epoch now
+  for file in "${WRANGLER_CONFIGS[@]}"; do
+    [[ -r $file ]] || continue
+    token=$(toml_value "$file" oauth_token)
+    [[ -n $token ]] || continue
+    expires=$(toml_value "$file" expiration_time)
+    session="active"
+    if [[ -n $expires ]]; then
+      expiry_epoch=$(date -u -d "$expires" +%s 2>/dev/null) || expiry_epoch=""
+      now=$(date -u +%s)
+      [[ -n $expiry_epoch ]] && (( expiry_epoch <= now )) && session="expired"
+    fi
+    break
+  done
+
+  # Named, never printed: an environment token silently outranks a saved file,
+  # and someone wondering why their pasted token did nothing deserves to know.
+  if   [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then env_var="CLOUDFLARE_API_TOKEN"
+  elif [[ -n ${CF_API_TOKEN:-} ]];        then env_var="CF_API_TOKEN"
+  fi
+  [[ -r $TOKEN_FILE ]] && file_present=true
+  resolve secret-tool >/dev/null 2>&1 && keyring=true
+
+  "$JQ" -n \
+    --arg wrangler_cmd "$wrangler_cmd" \
+    --arg session "$session" \
+    --arg expires "$expires" \
+    --arg env_var "$env_var" \
+    --arg token_path "$(pretty_path "$TOKEN_FILE")" \
+    --argjson file_present "$file_present" \
+    --argjson keyring "$keyring" '{
+      wrangler_command: $wrangler_cmd,
+      wrangler_available: ($wrangler_cmd != ""),
+      wrangler_session: $session,
+      wrangler_expires_at: $expires,
+      env_var: $env_var,
+      token_file: $token_path,
+      token_file_present: $file_present,
+      keyring_available: $keyring,
+      token_url: "https://dash.cloudflare.com/profile/api-tokens"
+    }'
+}
+
+# The token arrives on stdin, never in argv, so it cannot be read out of the
+# process list. It is checked before it is written: a saved token that does not
+# work is worse than no token at all, because it outranks — and therefore
+# hides — the wrangler fallback that was working a moment ago.
+cmd_save_token() {
+  local token
+  IFS= read -r token || true
+  token=$(printf '%s' "${token:-}" | tr -d '\r\n[:space:]')
+  [[ -n $token ]] || die "no token given"
+
+  TOKEN="$token"
+  TOKEN_KIND="api"
+  TOKEN_SOURCE="stdin"
+
+  local raw err
+  raw=$(api GET /user/tokens/verify)
+  err=$(api_error "$raw")
+  [[ -n $err ]] && die "$err" "Nothing was saved."
+
+  # verify only proves the token exists and is active. This proves it can do
+  # the one thing the panel cannot work without.
+  raw=$(api GET "/zones?per_page=1")
+  err=$(api_error "$raw")
+  [[ -n $err ]] && die "$err" "The token is valid but cannot read zones — it needs Zone → Zone → Read. Nothing was saved."
+
+  local dir; dir=$(dirname "$TOKEN_FILE")
+  mkdir -p "$dir" 2>/dev/null && chmod 700 "$dir" 2>/dev/null
+  ( umask 077; printf '%s\n' "$token" > "$TOKEN_FILE" ) || die "could not write $(pretty_path "$TOKEN_FILE")"
+  chmod 600 "$TOKEN_FILE" 2>/dev/null
+
+  # Anything cached was fetched by whatever credential came before this one.
+  rm -rf "$CACHE_DIR" 2>/dev/null
+
+  "$JQ" -n --arg path "$(pretty_path "$TOKEN_FILE")" \
+           --arg env "${CLOUDFLARE_API_TOKEN:+CLOUDFLARE_API_TOKEN}" '
+    {ok: true, saved_to: $path}
+    + (if $env == "" then {} else
+        {warning: ($env + " is set and takes precedence over the saved file.")}
+       end)'
+}
+
+cmd_forget_token() {
+  local had=false
+  [[ -r $TOKEN_FILE ]] && had=true
+  rm -f "$TOKEN_FILE" 2>/dev/null
+  rm -rf "$CACHE_DIR" 2>/dev/null
+  "$JQ" -n --argjson had "$had" --arg env "${CLOUDFLARE_API_TOKEN:+CLOUDFLARE_API_TOKEN}${CF_API_TOKEN:+CF_API_TOKEN}" '
+    {ok: true, removed: $had}
+    + (if $env == "" then {} else
+        {warning: ($env + " is still set in the environment; this cannot unset it.")}
+       end)'
+}
+
 # ------------------------------------------------------------------- writes
 
 cmd_devmode() {
@@ -598,6 +712,9 @@ cmd_purge() {
 
 case "${1:-status}" in
   status)   cmd_status ;;
+  setup)    cmd_setup ;;
+  save-token)   cmd_save_token ;;
+  forget-token) cmd_forget_token ;;
   zones)    cmd_zones ;;
   overview) shift; cmd_overview "$@" ;;
   tunnels)  shift; cmd_tunnels "$@" ;;

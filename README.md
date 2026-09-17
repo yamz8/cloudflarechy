@@ -33,8 +33,17 @@ omarchy plugin enable cloudflarechy --section right
 omarchy bar move cloudflarechy --after omarchy.tray   # somewhere else in the row
 ```
 
-Then give it a token (below). Without one the panel says `not connected` and
-explains what to do.
+Nothing needs to be prepared first. Open the panel and it shows a **Connect**
+screen with two routes:
+
+- **Sign in with wrangler** — one click, launches `wrangler login` in a
+  terminal, and gives you the full read-only dashboard.
+- **Paste an API token** — adds the switches and a bar dot you can trust
+  overnight.
+
+Either can be changed later: the key icon in the panel header (or `c`) reopens
+that screen, so a wrangler session can be upgraded to a token whenever you like,
+and a saved token can be forgotten to fall back to wrangler.
 
 Plugins are unsandboxed code in your long-lived shell process, so read
 `bin/cloudflarechy` and the QML before you install this — it is about 500 lines
@@ -42,12 +51,18 @@ of bash and some QML, and all the network calls are in the one script.
 
 ## The API token
 
-Create a token at
-[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
-and save it where the plugin can find it:
+The simplest route is the panel itself: press `c`, paste into the field, press
+Enter. The token is checked against Cloudflare *before* it is written — a
+token that does not work is worse than none, because it outranks and therefore
+hides the wrangler fallback that was working a moment ago. It goes to the
+helper over stdin rather than in a command line, where it would be readable
+from the process list, and lands in `~/.config/cloudflarechy/token` as `600`
+inside a `700` directory.
+
+To do it by hand instead:
 
 ```bash
-mkdir -p ~/.config/cloudflarechy
+mkdir -p ~/.config/cloudflarechy && chmod 700 ~/.config/cloudflarechy
 printf '%s\n' 'YOUR_TOKEN' > ~/.config/cloudflarechy/token
 chmod 600 ~/.config/cloudflarechy/token
 ```
@@ -151,6 +166,7 @@ The Dashboard button is one click from all of them.
 | click the icon | open/close the panel |
 | right-click the icon | refresh now |
 | `r` | refresh now |
+| `c` | credential screen — sign in, paste a token, or forget one |
 | `d` | toggle Development Mode |
 | `u` | toggle Under Attack Mode |
 | `p` | purge cache (asks first) |
@@ -179,6 +195,9 @@ subcommand prints one JSON object, errors included:
 
 ```bash
 ./bin/cloudflarechy status
+./bin/cloudflarechy setup                      # what credentials this machine could use
+printf '%s\n' TOKEN | ./bin/cloudflarechy save-token   # checked, then saved 600
+./bin/cloudflarechy forget-token
 ./bin/cloudflarechy zones
 ./bin/cloudflarechy overview <zone-id>
 ./bin/cloudflarechy tunnels <account-id>

@@ -77,6 +77,18 @@ Panel {
   property var updatedAt: null
   property bool purgeConfirmOpen: false
 
+  // --- connecting ----------------------------------------------------------
+  // The panel used to answer "no token" with a paragraph telling you to go
+  // somewhere else and do something. This is that somewhere else.
+  property var setupInfo: null
+  property bool showSetup: false
+  property string setupStatus: ""
+  property bool setupFailed: false
+  property bool savingToken: false
+
+  // Shown on demand, and unavoidably when there is nothing to show without it.
+  readonly property bool setupVisible: root.showSetup || !root.tokenPresent
+
   readonly property bool loading: bridge.busy
 
   readonly property var zone: root.overview ? root.overview.zone : root.zoneById(root.zoneId)
@@ -303,6 +315,59 @@ Panel {
     root.runAction("purge", [root.zoneId], "Cache purged")
   }
 
+  function loadSetup() {
+    bridge.call(["setup"], function(payload) {
+      if (payload && !payload.error) root.setupInfo = payload
+    }, true)
+  }
+
+  function openSetup() {
+    root.showSetup = true
+    root.setupStatus = ""
+    root.setupFailed = false
+    root.loadSetup()
+  }
+
+  function closeSetup() { root.showSetup = false }
+
+  // wrangler login is a browser round trip with a prompt at the end of it, so
+  // it belongs in a terminal the user can see, not in a Process this panel
+  // would have to babysit. We launch it and then wait to be told to look again.
+  function startWranglerLogin() {
+    var command = root.setupInfo ? (root.setupInfo.wrangler_command || "") : ""
+    if (command === "" || !root.bar) return
+    root.setupFailed = false
+    root.setupStatus = "Finishing in the terminal — reopen this when the browser is done."
+    root.bar.run("omarchy-launch-floating-terminal-with-presentation '" + command + "'")
+  }
+
+  function saveToken(value) {
+    var token = String(value || "").trim()
+    if (token === "" || root.savingToken) return
+    root.savingToken = true
+    root.setupStatus = "Checking the token…"
+    root.setupFailed = false
+    tokenSaver.secret = token
+    tokenSaver.running = true
+  }
+
+  function forgetToken() {
+    bridge.call(["forget-token"], function(payload) {
+      root.setupFailed = false
+      root.setupStatus = payload && payload.warning ? payload.warning
+                       : "Saved token removed"
+      root.loadSetup()
+      root.refresh(true)
+    }, true)
+  }
+
+  function openTokenPage() {
+    var url = root.setupInfo && root.setupInfo.token_url
+              ? root.setupInfo.token_url
+              : "https://dash.cloudflare.com/profile/api-tokens"
+    root.openUrl(url)
+  }
+
   function openDashboard() {
     if (!root.zone) return
     var url = "https://dash.cloudflare.com/" + (root.accountId || "")
@@ -405,9 +470,12 @@ Panel {
       // Cached on the script side, so opening the panel repeatedly costs
       // nothing until the cache ages out.
       root.refresh(false)
+      root.loadSetup()
     } else {
       root.purgeConfirmOpen = false
       root.actionStatus = ""
+      root.showSetup = false
+      root.setupStatus = ""
     }
   }
 
@@ -459,6 +527,44 @@ Panel {
 
   Bridge { id: bridge }
 
+  // The token goes over stdin, never argv: anything in a command line is
+  // readable out of the process list for as long as the process lives.
+  Process {
+    id: tokenSaver
+    property string secret: ""
+    property string collected: ""
+    command: [bridge.script, "save-token"]
+    stdinEnabled: true
+
+    onStarted: {
+      write(tokenSaver.secret + "\n")
+      tokenSaver.secret = ""
+    }
+
+    stdout: SplitParser {
+      onRead: function(line) { tokenSaver.collected += String(line || "") }
+    }
+
+    onExited: function(code) {
+      var payload = null
+      try { payload = JSON.parse(tokenSaver.collected) } catch (e) { payload = null }
+      tokenSaver.collected = ""
+      root.savingToken = false
+
+      if (!payload || payload.error) {
+        root.setupFailed = true
+        root.setupStatus = payload && payload.error ? payload.error : "could not save the token"
+        if (payload && payload.hint) root.setupStatus += " — " + payload.hint
+        return
+      }
+      root.setupFailed = false
+      root.setupStatus = payload.warning ? payload.warning : "Token saved"
+      // Straight to the thing they came for.
+      root.showSetup = false
+      root.refresh(true)
+    }
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -500,13 +606,20 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: root.setupVisible ? tokenInput : keyCatcher
     contentWidth: panel.fittedContentWidth(root.panelContentWidth)
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
+    contentHeight: panel.fittedContentHeight(
+                     root.setupVisible
+                       ? Math.max(column.implicitHeight, setupContent.implicitHeight)
+                       : column.implicitHeight,
+                     Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While the token field owns the keyboard, every keystroke belongs to it
+      // — including the letters that are shortcuts everywhere else.
+      blocked: tokenInput.activeFocus
 
       // Left/Right walk the zones; with the purge dialog up they walk its two
       // buttons instead, which is the only cursor this panel has.
@@ -527,13 +640,17 @@ Panel {
       }
       onCloseRequested: {
         if (root.purgeConfirmOpen) root.purgeConfirmOpen = false
+        // Escape backs out of the setup screen, unless backing out would leave
+        // nothing behind it.
+        else if (root.showSetup && root.tokenPresent) root.closeSetup()
         else root.close()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (root.purgeConfirmOpen) return
+        if (root.purgeConfirmOpen || root.setupVisible) return
         var key = t.toLowerCase()
         if (key === "r") root.refresh(true)
+        else if (key === "c") root.openSetup()
         else if (root.readOnly) return
         else if (key === "d") root.toggleDevMode()
         else if (key === "u") root.toggleAttack()
@@ -576,8 +693,9 @@ Panel {
               anchors.leftMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - mark.width - refreshButton.width
+                     - credentialButton.width
                      - (dashboardButton.visible ? dashboardButton.width + Style.spacing.sm : 0)
-                     - Style.spacing.sm * 2
+                     - Style.spacing.sm * 3
               visible: root.zones.length > 1
               showLabel: false
               value: root.zoneId
@@ -597,8 +715,9 @@ Panel {
               anchors.leftMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - mark.width - refreshButton.width
+                     - credentialButton.width
                      - (dashboardButton.visible ? dashboardButton.width + Style.spacing.sm : 0)
-                     - Style.spacing.sm * 2
+                     - Style.spacing.sm * 3
               visible: root.zones.length <= 1
               font.family: root.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -613,6 +732,21 @@ Panel {
                   : !root.tokenPresent ? "not connected"
                   : "no zones on this token"
               opacity: root.zone ? 1.0 : 0.55
+            }
+
+            // The "add a token later" route, and the only way back to the
+            // setup screen once a credential is working.
+            PanelActionButton {
+              id: credentialButton
+              anchors.right: refreshButton.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰌋"
+              tooltipText: root.readOnly
+                           ? "Read-only session — add an API token"
+                           : "Credential"
+              foreground: root.readOnly ? root.brand : root.foreground
+              onClicked: root.setupVisible ? root.closeSetup() : root.openSetup()
             }
 
             PanelActionButton {
@@ -643,7 +777,9 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.spacing.labelGap
-            visible: root.error !== ""
+            // Credential problems are handled by the setup screen, which is
+            // already covering this. Everything else still reports here.
+            visible: root.error !== "" && !root.setupVisible
 
             Text {
               width: parent.width
@@ -1033,6 +1169,262 @@ Panel {
               if (root.updatedAt) bits.push("updated " + Qt.formatDateTime(root.updatedAt, "HH:mm"))
               return bits.join("  ·  ")
             }
+          }
+        }
+      }
+
+      // ---- connecting --------------------------------------------------
+      // Covers the panel rather than sitting inside it: when there is no
+      // credential there is nothing behind it worth seeing, and when there is
+      // one, this is a modal errand you came here to finish.
+      Rectangle {
+        id: setupView
+        anchors.fill: parent
+        z: 15
+        visible: root.setupVisible
+        color: Color.popups.background
+
+        // The panel only primes focus when it opens, so a setup screen summoned
+        // mid-session has to claim the keyboard itself — and hand it back, or
+        // closing the screen would leave every key going to a hidden field.
+        onVisibleChanged: {
+          if (setupView.visible) {
+            tokenInput.forceActiveFocus()
+          } else {
+            tokenInput.text = ""
+            keyCatcher.forceActiveFocus()
+          }
+        }
+
+        readonly property var info: root.setupInfo
+        readonly property string session: setupView.info
+          ? String(setupView.info.wrangler_session || "none") : "none"
+        readonly property bool wranglerReady: setupView.info
+          ? setupView.info.wrangler_available === true : false
+        readonly property bool hasSavedToken: setupView.info
+          ? setupView.info.token_file_present === true : false
+        readonly property string envVar: setupView.info
+          ? String(setupView.info.env_var || "") : ""
+
+        // Nothing behind this should react to a click aimed at it.
+        MouseArea { anchors.fill: parent; hoverEnabled: true }
+
+        Column {
+          id: setupContent
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          spacing: Style.space(10)
+
+          Item {
+            width: parent.width
+            height: Math.max(setupMark.height, setupTitle.implicitHeight, setupClose.height)
+
+            CloudMark {
+              id: setupMark
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              size: Style.space(24)
+              brandColors: true
+            }
+
+            Text {
+              id: setupTitle
+              anchors.left: setupMark.right
+              anchors.leftMargin: Style.spacing.sm
+              anchors.right: setupClose.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              color: root.foreground
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+              text: root.tokenPresent ? "Credential" : "Connect to Cloudflare"
+            }
+
+            // Only offered when there is something to go back to.
+            PanelActionButton {
+              id: setupClose
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.tokenPresent
+              iconText: "󰅖"
+              tooltipText: "Back"
+              foreground: root.foreground
+              onClicked: root.closeSetup()
+            }
+          }
+
+          // ---- the no-setup route ----------------------------------------
+          PanelSectionHeader {
+            width: parent.width
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: "SIGN IN WITH WRANGLER"
+          }
+
+          Text {
+            width: parent.width
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.55
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            // The honest pitch: free, instant, and limited in two ways that
+            // will matter later.
+            text: setupView.wranglerReady
+                  ? "Reads traffic, tunnels and Workers. It cannot switch anything — wrangler can only be granted zone:read — and its session lasts about an hour."
+                  : "Needs wrangler, or npx to run it. Neither is on PATH."
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(wranglerButton.height, wranglerState.implicitHeight)
+
+            Button {
+              id: wranglerButton
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: setupView.session === "active" ? "Sign in again" : "Sign in with wrangler"
+              tooltipText: setupView.info ? String(setupView.info.wrangler_command || "") : ""
+              enabled: setupView.wranglerReady
+              foreground: root.foreground
+              bordered: true
+              onClicked: root.startWranglerLogin()
+            }
+
+            Text {
+              id: wranglerState
+              anchors.left: wranglerButton.right
+              anchors.leftMargin: Style.spacing.md
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: setupView.session === "expired" ? root.brand : root.foreground
+              opacity: setupView.session === "expired" ? 1.0 : 0.5
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: setupView.session === "active"
+                    ? ("signed in until "
+                       + root.localTime(setupView.info ? setupView.info.wrangler_expires_at : ""))
+                  : setupView.session === "expired" ? "session expired"
+                  : ""
+            }
+          }
+
+          PanelSeparator { width: parent.width; foreground: root.foreground }
+
+          // ---- the full-power route --------------------------------------
+          PanelSectionHeader {
+            width: parent.width
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: root.tokenPresent && !root.readOnly ? "API TOKEN  ·  IN USE" : "OR PASTE AN API TOKEN"
+          }
+
+          Text {
+            width: parent.width
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.55
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Zone → Zone → Read plus Zone → Analytics → Read shows everything above. Add Zone Settings → Edit and Cache Purge → Purge for the switches. Checked before it is saved."
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(tokenInput.height, saveTokenButton.height)
+
+            TextField {
+              id: tokenInput
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - saveTokenButton.width - Style.spacing.sm
+              password: true
+              placeholderText: "Paste a token"
+              foreground: root.foreground
+              enabled: !root.savingToken
+              onAccepted: root.saveToken(tokenInput.text)
+
+              // The key catcher is blocked while this field has focus, so the
+              // way out has to live here too.
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  if (root.tokenPresent) root.closeSetup()
+                  else root.close()
+                  event.accepted = true
+                }
+              }
+            }
+
+            Button {
+              id: saveTokenButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.savingToken ? "Checking…" : "Save"
+              enabled: !root.savingToken && tokenInput.text.trim() !== ""
+              foreground: root.foreground
+              bordered: true
+              onClicked: root.saveToken(tokenInput.text)
+            }
+          }
+
+          Item {
+            width: parent.width
+            height: Math.max(tokenPageButton.height, forgetTokenButton.height)
+
+            Button {
+              id: tokenPageButton
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Create a token"
+              tooltipText: "dash.cloudflare.com/profile/api-tokens"
+              foreground: root.foreground
+              onClicked: root.openTokenPage()
+            }
+
+            Button {
+              id: forgetTokenButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              visible: setupView.hasSavedToken
+              text: "Forget saved token"
+              tooltipText: setupView.info ? String(setupView.info.token_file || "") : ""
+              foreground: root.foreground
+              onClicked: root.forgetToken()
+            }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.setupStatus !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.setupFailed ? Color.urgent : root.foreground
+            opacity: root.setupFailed ? 1.0 : 0.6
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: root.setupStatus
+          }
+
+          // An exported variable beats the file silently, which is a horrible
+          // thing to debug by guesswork.
+          Text {
+            width: parent.width
+            visible: setupView.envVar !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.brand
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: setupView.envVar + " is set in the environment and takes precedence over anything saved here."
           }
         }
       }

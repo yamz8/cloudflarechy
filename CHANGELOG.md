@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- Add a Connect screen. A fresh install no longer answers "no token" with a
+  paragraph telling you to go elsewhere: the panel offers `wrangler login` in
+  one click, or a field to paste an API token into.
+- Reach it again any time with the key icon in the header or `c`, so a
+  read-only wrangler session can be upgraded to a token later, and a saved
+  token can be forgotten to fall back to wrangler.
+- Tokens are validated against Cloudflare before they are saved — a token that
+  does not work would otherwise outrank, and hide, a wrangler fallback that was
+  working. They travel over stdin rather than argv, and land `600` in a `700`
+  directory.
+- Name an environment token that is silently outranking the saved file, which
+  is otherwise debugged by guesswork.
+- New `setup`, `save-token` and `forget-token` subcommands behind all of it.
+
 ## 0.2.0
 
 - Fall back to wrangler's OAuth credential when no API token is configured, so
