@@ -15,6 +15,7 @@
 #   cloudflarechy overview <zone-id>
 #   cloudflarechy tunnels <account-id>
 #   cloudflarechy workers <account-id>
+#   cloudflarechy worker  <account-id> <script>
 #   cloudflarechy devmode <zone-id> on|off
 #   cloudflarechy attack  <zone-id> on|off
 #   cloudflarechy purge   <zone-id>
@@ -618,6 +619,101 @@ worker_metrics() {
       }' <<<"$raw"
 }
 
+# One Worker, in detail: where its invocations went, how long they took, and
+# what the last 24 hours looked like hour by hour. Fetched on demand — the list
+# view only needs totals, and this asks for a row per hour per status.
+cmd_worker() {
+  local account="${1:-}" script="${2:-}"
+  [[ -n $account ]] || die "worker needs an account id"
+  [[ -n $script ]] || die "worker needs a script name"
+  require_token
+
+  local cached
+  if cached=$(cache_read "worker.$account.$script.json" 60); then printf '%s\n' "$cached"; return; fi
+
+  local since till
+  since=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  till=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  if [[ -z $since || -z $till ]]; then
+    die "could not compute a time window"
+  fi
+
+  local query vars raw err
+  query='query ($account: String!, $script: String!, $since: Time!, $until: Time!) {
+  viewer {
+    accounts(filter: {accountTag: $account}) {
+      workersInvocationsAdaptive(
+        limit: 1000
+        orderBy: [datetimeHour_ASC]
+        filter: {datetime_geq: $since, datetime_lt: $until, scriptName: $script}
+      ) {
+        dimensions { datetimeHour status }
+        sum { requests errors subrequests }
+        quantiles { cpuTimeP50 cpuTimeP99 }
+      }
+    }
+  }
+}'
+  vars=$("$JQ" -n --arg a "$account" --arg s "$script" --arg since "$since" --arg u "$till" \
+    '{account: $a, script: $s, since: $since, until: $u}')
+
+  raw=$(gql "$query" "$vars")
+  err=$(gql_error "$raw")
+  if [[ -n $err ]]; then
+    "$JQ" -n --arg name "$script" --arg e "$err" \
+      '{worker: {name: $name}, statuses: [], series: [], error: $e}'
+    return
+  fi
+
+  # Quantiles are never summed or averaged: for each status the figure kept is
+  # the one from that status'"'"'s busiest hour, which is the population it
+  # actually describes. Requests and errors do add up.
+  "$JQ" --arg name "$script" '
+    ((.data.viewer.accounts // [])[0].workersInvocationsAdaptive // []) as $rows
+    | (reduce $rows[] as $r ({};
+        ($r.dimensions.status // "unknown") as $status
+        | ($r.sum.requests // 0) as $requests
+        | .[$status] = {
+            status:     $status,
+            requests:   ((.[$status].requests // 0) + $requests),
+            errors:     ((.[$status].errors // 0) + ($r.sum.errors // 0)),
+            cpu_p50_us: (if $requests >= (.[$status].busiest // -1)
+                         then ($r.quantiles.cpuTimeP50 // 0) else (.[$status].cpu_p50_us // 0) end),
+            cpu_p99_us: (if $requests >= (.[$status].busiest // -1)
+                         then ($r.quantiles.cpuTimeP99 // 0) else (.[$status].cpu_p99_us // 0) end),
+            busiest:    (if $requests >= (.[$status].busiest // -1)
+                         then $requests else (.[$status].busiest // 0) end)
+          })) as $by_status
+    | (reduce $rows[] as $r ({};
+        ($r.dimensions.datetimeHour // "") as $hour
+        | .[$hour] = {
+            t:        $hour,
+            requests: ((.[$hour].requests // 0) + ($r.sum.requests // 0)),
+            errors:   ((.[$hour].errors // 0) + ($r.sum.errors // 0))
+          })) as $by_hour
+    | ([$by_status[] | .requests] | add // 0) as $requests
+    | ([$by_status[] | .errors] | add // 0) as $errors
+    | ([$by_status | to_entries[] | select(.key == "success")][0].value) as $success
+    | {
+        worker: {
+          name:        $name,
+          requests:    $requests,
+          errors:      $errors,
+          subrequests: ([$rows[] | .sum.subrequests // 0] | add // 0),
+          # The headline pair belongs to the busiest status, which is the one
+          # the overwhelming majority of invocations took.
+          cpu_p50_us:  ([$by_status[]] | sort_by(.requests) | last | .cpu_p50_us // 0),
+          cpu_p99_us:  ([$by_status[]] | sort_by(.requests) | last | .cpu_p99_us // 0),
+          success_ratio: (if $requests > 0
+                          then (($success.requests // 0) / $requests) else 0 end),
+          hours: ($by_hour | length)
+        },
+        statuses: ([$by_status[] | del(.busiest)] | sort_by(.requests) | reverse),
+        series:   ([$by_hour[]] | sort_by(.t)),
+        error: ""
+      }' <<<"$raw" | cache_and_print "worker.$account.$script.json"
+}
+
 # ---------------------------------------------------------------- setting up
 
 # What routes to a credential exist on this machine. The panel's setup screen
@@ -816,6 +912,7 @@ case "${1:-status}" in
   overview) shift; cmd_overview "$@" ;;
   tunnels)  shift; cmd_tunnels "$@" ;;
   workers)  shift; cmd_workers "$@" ;;
+  worker)   shift; cmd_worker "$@" ;;
   devmode)  shift; cmd_devmode "$@" ;;
   attack)   shift; cmd_attack "$@" ;;
   purge)    shift; cmd_purge "$@" ;;

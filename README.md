@@ -177,8 +177,20 @@ Requests are summed across invocation statuses. CPU is not — a quantile is not
 an average, and averaging two p50s describes nothing — so the figure shown is
 the p50 of the busiest status for that script. A Worker with no invocations in
 the window has no analytics row at all, which is different from one that ran
-zero times, so it falls back to saying when it was last deployed. Clicking a
-row opens that Worker's metrics tab, not the account-wide list.
+zero times, so it falls back to saying when it was last deployed.
+
+**Click a Worker** and the panel gives that script the whole screen:
+
+![One Worker in detail](worker.png)
+
+Requests, success rate, p50 and p99 CPU, subrequests, its own 24h graph with
+errors filled in, and the invocation-status breakdown — which is where a
+failure actually gets explained, since `scriptThrewException` and
+`clientDisconnected` mean very different things and the dashboard buries both.
+Each status keeps its own quantiles rather than inheriting the headline pair.
+The success rate never rounds up to 100%: a Worker at 99.6% is not a Worker
+with no failures. `Esc` or the arrow goes back; **Dashboard** opens that
+Worker's metrics tab.
 
 Deliberately absent: DNS records, firewall rules, R2, Pages. Those are editing
 surfaces, and editing them from a popup you opened by accident is a bad idea.
@@ -192,7 +204,7 @@ The Dashboard button is one click from all of them.
 | right-click the icon | refresh now |
 | `r` | refresh now |
 | `c` | credential screen — sign in, paste a token, or forget one |
-| `Esc` | leave the credential screen (the token field holds the keyboard while it is up) |
+| `Esc` | leave the credential screen, or a Worker's detail view |
 | `d` | toggle Development Mode |
 | `u` | toggle Under Attack Mode |
 | `p` | purge cache (asks first) |
@@ -213,7 +225,7 @@ own settings UI:
 | `showTunnels` | `true` | Show the tunnels section. |
 | `showWorkers` | `true` | Show the Workers section. |
 | `attentionDot` | `true` | Colour the bar icon, and add a dot, when something needs attention. Off keeps the bar quiet. |
-| `errorPercent` | `5` | Share of requests answering 5xx before the icon lights. Needs 20+ of them as well, so a quiet hour cannot trip it. |
+| `errorPercent` | `5` | Share of requests answering 5xx before the icon lights. Needs 20+ of them as well, so a quiet hour cannot trip it. `0` turns this trigger off and leaves the switch and tunnel ones. |
 
 ## From the command line
 
@@ -229,6 +241,7 @@ printf '%s\n' TOKEN | ./bin/cloudflarechy save-token   # checked, then saved 600
 ./bin/cloudflarechy overview <zone-id>
 ./bin/cloudflarechy tunnels <account-id>
 ./bin/cloudflarechy workers <account-id>
+./bin/cloudflarechy worker  <account-id> <script>
 ./bin/cloudflarechy devmode <zone-id> on|off
 ./bin/cloudflarechy attack  <zone-id> on|off
 ./bin/cloudflarechy purge   <zone-id>
@@ -244,6 +257,7 @@ The running widget answers over IPC too:
 ```bash
 omarchy-shell cloudflarechy status     # one line: zone, dev mode, attack, tunnels
 omarchy-shell cloudflarechy refresh
+omarchy-shell cloudflarechy worker <script>    # open that Worker's detail view
 omarchy-shell cloudflarechy toggle
 ```
 
@@ -253,12 +267,13 @@ omarchy-shell cloudflarechy toggle
 ./tests/run.sh
 ```
 
-72 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
+88 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
 a stand-in shaped like the real API. They pin the things that are easy to break
 without noticing: the write guard, the security-level save *and* its fallback,
 the analytics query giving up one optional field at a time, 4xx never being
 counted as 5xx, Workers CPU coming from the busiest status rather than an
-average of quantiles, the read cache and its `--fresh` bypass, and that a
+average of quantiles, a Worker's totals counting every status and not just the
+successful ones, the read cache and its `--fresh` bypass, and that a
 rejected token is never written to disk.
 
 Everything runs under a temporary `HOME`, so the suite cannot touch your real

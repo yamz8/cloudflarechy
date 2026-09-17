@@ -32,6 +32,10 @@ Item {
   id: root
 
   property var series: []
+  // Which field of each bucket the filled portion represents. Zone traffic
+  // fills by cache hits; a Worker fills by errors. Same shape, same reading:
+  // "how much of this hour was the thing worth noticing".
+  property string fillKey: "cached"
   property color foreground: Color.foreground
   property color accent: "#f6821f"
   property real barSpacing: Style.spacing.xxs
@@ -63,7 +67,7 @@ Item {
         height: root.height
 
         readonly property real total: Number(modelData.requests || 0)
-        readonly property real cached: Number(modelData.cached || 0)
+        readonly property real cached: Number(modelData[root.fillKey] || 0)
         readonly property real ratio: root.peak > 0
                                       ? Math.sqrt(total) / Math.sqrt(root.peak) : 0
 

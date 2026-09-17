@@ -157,6 +157,35 @@ class Handler(BaseHTTPRequestHandler):
                 if variables.get("account") == ACCOUNT_NO_METRICS:
                     return self.reply({"data": None, "errors": [
                         {"message": "account analytics are not readable with this token"}]})
+
+                # The detail query asks for an hour dimension and filters to one
+                # script. Exact, hand-checkable numbers: 24 hours of 100 good
+                # requests, and two hours that also threw five exceptions.
+                if "datetimeHour" in query:
+                    script = variables.get("script", "")
+                    if script != "api-router":
+                        return self.reply({"data": {"viewer": {"accounts": [
+                            {"workersInvocationsAdaptive": []}]}}, "errors": None})
+                    now = datetime.datetime.now(datetime.timezone.utc).replace(
+                        minute=0, second=0, microsecond=0)
+                    rows = []
+                    for i in range(24):
+                        hour = (now - datetime.timedelta(hours=23 - i)).strftime(
+                            "%Y-%m-%dT%H:00:00Z")
+                        rows.append({
+                            "dimensions": {"datetimeHour": hour, "status": "success"},
+                            "sum": {"requests": 100, "errors": 0, "subrequests": 2},
+                            "quantiles": {"cpuTimeP50": 8644, "cpuTimeP99": 20000},
+                        })
+                        if i in (5, 6):
+                            rows.append({
+                                "dimensions": {"datetimeHour": hour,
+                                               "status": "scriptThrewException"},
+                                "sum": {"requests": 5, "errors": 5, "subrequests": 0},
+                                "quantiles": {"cpuTimeP50": 457, "cpuTimeP99": 900},
+                            })
+                    return self.reply({"data": {"viewer": {"accounts": [
+                        {"workersInvocationsAdaptive": rows}]}}, "errors": None})
                 return self.reply({"data": {"viewer": {"accounts": [{
                     "workersInvocationsAdaptive": [
                         {"dimensions": {"scriptName": "api-router", "status": "success"},

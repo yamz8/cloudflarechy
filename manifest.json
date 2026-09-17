@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cloudflarechy",
   "name": "Cloudflarechy",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "yamz8",
   "license": "MIT",
   "description": "One Cloudflare zone from the Omarchy bar: 24h traffic, cache ratio, tunnels, and the two switches you forget to turn off",
@@ -74,7 +74,7 @@
         "max": 100,
         "step": 1,
         "defaultValue": 5,
-        "description": "Share of requests answering 5xx before the icon changes colour. Also needs at least 20 of them, so a quiet hour cannot trip it on a handful of requests. 0 lights on any."
+        "description": "Share of requests answering 5xx before the icon changes colour. Also needs at least 20 of them, so a quiet hour cannot trip it on a handful of requests. 0 turns this trigger off, leaving the switches and tunnels."
       }
     ]
   }

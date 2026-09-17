@@ -172,6 +172,36 @@ assert_contains "  ... and the reason is reported" "not readable" "$(field '.met
 assert_eq "  ... with no invented traffic" "null" "$(field '.workers[0].requests' <<<"$out")"
 
 echo
+echo "one worker in detail"
+
+out=$(run --fresh worker "$ACCOUNT" api-router)
+assert_eq "requests total across statuses" "2410" "$(field '.worker.requests' <<<"$out")"
+assert_eq "errors total" "10" "$(field '.worker.errors' <<<"$out")"
+assert_eq "subrequests total" "48" "$(field '.worker.subrequests' <<<"$out")"
+assert_eq "the headline p50 is the busiest status's" "8644" "$(field '.worker.cpu_p50_us' <<<"$out")"
+assert_eq "  ... and so is p99" "20000" "$(field '.worker.cpu_p99_us' <<<"$out")"
+assert_eq "success ratio is not rounded to 1" "0.9959" \
+  "$(field '(.worker.success_ratio * 10000 | round) / 10000' <<<"$out")"
+assert_eq "statuses come busiest first" "success" "$(field '.statuses[0].status' <<<"$out")"
+assert_eq "  ... and the failing one keeps its own quantile" "457" \
+  "$(field '.statuses[1].cpu_p50_us' <<<"$out")"
+assert_eq "  ... and its errors" "10" "$(field '.statuses[1].errors' <<<"$out")"
+assert_eq "an hour per bucket" "24" "$(field '.series | length' <<<"$out")"
+assert_eq "  ... carrying that hour's errors" "5" "$(field '.series[5].errors' <<<"$out")"
+assert_eq "  ... and its requests" "105" "$(field '.series[5].requests' <<<"$out")"
+
+out=$(run --fresh worker "$ACCOUNT" nonexistent-script)
+assert_eq "a script with no invocations is empty, not an error" "0" \
+  "$(field '.statuses | length' <<<"$out")"
+assert_eq "  ... with no error surfaced" "" "$(field '.error' <<<"$out")"
+
+out=$(run --fresh worker "$ACCOUNT_NO_METRICS" api-router)
+assert_contains "without analytics the reason is reported" "not readable" "$(field '.error' <<<"$out")"
+
+out=$(run worker "$ACCOUNT")
+assert_contains "a missing script name is refused" "needs a script" "$(field '.error' <<<"$out")"
+
+echo
 echo "writes"
 
 out=$(run devmode "$ZONE" on)

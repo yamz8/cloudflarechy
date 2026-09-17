@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0
+
+- Click a Worker to give it the whole panel: requests, success rate, p50 and
+  p99 CPU, subrequests, its own 24h graph with errors filled in, and the
+  invocation-status breakdown. `scriptThrewException` and `clientDisconnected`
+  mean different things and the dashboard buries both; each status keeps its
+  own quantiles rather than inheriting the headline pair.
+- The success rate never rounds up to 100%. A Worker at 99.62% is not a Worker
+  with no failures, and that screen exists to show the difference.
+- The graph's filled portion is now a named field, so the zone chart fills by
+  cache hits and a Worker's fills by errors without either pretending to be
+  the other.
+- Each screen sizes the panel to itself instead of to the tallest one, so
+  drilling into a Worker no longer leaves a lake of empty panel below it.
+- `worker <account> <script>` on the CLI, and
+  `omarchy-shell cloudflarechy worker <script>` over IPC.
+
 ## 0.6.0
 
 - The bar icon also lights when the zone is answering 5xx above a threshold,

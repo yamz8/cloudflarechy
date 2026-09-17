@@ -85,6 +85,15 @@ Panel {
   // --- connecting ----------------------------------------------------------
   // The panel used to answer "no token" with a paragraph telling you to go
   // somewhere else and do something. This is that somewhere else.
+  // One Worker, opened from its row. Replaces the panel rather than expanding
+  // under the row: the credential screen already established that shape here,
+  // and a list that grows a nested panel in the middle of itself reads badly
+  // at this width.
+  property string workerDetailName: ""
+  property var workerDetail: null
+  property bool workerDetailLoading: false
+  readonly property bool workerDetailVisible: root.workerDetailName !== ""
+
   property var setupInfo: null
   property bool showSetup: false
   property string setupStatus: ""
@@ -128,6 +137,11 @@ Panel {
   // worth opening the panel for too. Guarded by an absolute floor as well as a
   // rate: three 5xx out of four requests at 4am is a true 75% and not news.
   readonly property bool errorRateAlarming: {
+    // Zero is off, not "light on anything". A zone that is known to be failing
+    // and not being fixed today would otherwise hold the icon lit forever, and
+    // a permanently coloured icon is just a differently coloured icon — the
+    // signal stops being a signal. The switch and tunnel triggers stay.
+    if (root.errorThreshold <= 0) return false
     if (!root.analytics || root.analytics.statuses_known !== true) return false
     var errors = Number(root.analytics.server_errors || 0)
     if (errors < 20) return false
@@ -433,6 +447,26 @@ Panel {
     root.openUrl("https://dash.cloudflare.com/" + root.accountId + "/workers/services")
   }
 
+  function openWorkerDetail(name) {
+    if (!name || root.accountId === "") return
+    root.workerDetailName = name
+    root.workerDetail = null
+    root.workerDetailLoading = true
+    bridge.call(["worker", root.accountId, name], function(payload) {
+      root.workerDetailLoading = false
+      // A late answer for a Worker the user has already navigated away from
+      // must not paint over the one they are looking at now.
+      if (root.workerDetailName !== name) return
+      root.workerDetail = payload || null
+    }, false)
+  }
+
+  function closeWorkerDetail() {
+    root.workerDetailName = ""
+    root.workerDetail = null
+    root.workerDetailLoading = false
+  }
+
   function openWorker(name) {
     if (root.accountId === "" || !name) { root.openWorkersDashboard(); return }
     root.openUrl("https://dash.cloudflare.com/" + root.accountId
@@ -465,6 +499,17 @@ Panel {
     var i = 0
     while (n >= 1000 && i < units.length - 1) { n /= 1000; i++ }
     return (i === 0 ? String(Math.round(n)) : n.toFixed(n >= 100 ? 0 : 1)) + " " + units[i]
+  }
+
+  // Never rounds up to a clean 100%: a Worker at 99.62% success is not a
+  // Worker with no failures, and this screen exists to show the difference.
+  function percentExact(ratio) {
+    var n = Number(ratio || 0)
+    if (!isFinite(n)) return "0%"
+    if (n >= 1) return "100%"
+    var shown = Math.floor(n * 1000) / 10
+    if (shown >= 100) shown = 99.9
+    return (shown >= 99 ? shown.toFixed(1) : String(Math.round(shown))) + "%"
   }
 
   function percent(ratio) {
@@ -541,6 +586,7 @@ Panel {
       root.actionStatus = ""
       root.showSetup = false
       root.setupStatus = ""
+      root.closeWorkerDetail()
     }
   }
 
@@ -575,6 +621,12 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refresh(true); return "ok" }
+    function worker(name: string): string {
+      if (!name) { root.closeWorkerDetail(); return "closed" }
+      root.open()
+      root.openWorkerDetail(name)
+      return name
+    }
     function zone(): string { return root.zone ? root.zone.name : "" }
     function status(): string {
       if (root.error !== "") return root.error
@@ -695,9 +747,9 @@ Panel {
     focusTarget: root.setupVisible ? tokenInput : keyCatcher
     contentWidth: panel.fittedContentWidth(root.panelContentWidth)
     contentHeight: panel.fittedContentHeight(
-                     root.setupVisible
-                       ? Math.max(column.implicitHeight, setupContent.implicitHeight)
-                       : column.implicitHeight,
+                     root.setupVisible ? setupContent.implicitHeight
+                     : root.workerDetailVisible ? workerContent.implicitHeight
+                     : column.implicitHeight,
                      Style.space(640))
 
     PanelKeyCatcher {
@@ -726,6 +778,7 @@ Panel {
       }
       onCloseRequested: {
         if (root.purgeConfirmOpen) root.purgeConfirmOpen = false
+        else if (root.workerDetailVisible) root.closeWorkerDetail()
         // Escape backs out of the setup screen, unless backing out would leave
         // nothing behind it.
         else if (root.showSetup && root.tokenPresent) root.closeSetup()
@@ -744,7 +797,7 @@ Panel {
           root.showSetup ? root.closeSetup() : root.openSetup()
           return
         }
-        if (root.setupVisible) return
+        if (root.setupVisible || root.workerDetailVisible) return
         if (key === "r") root.refresh(true)
         else if (root.readOnly) return
         else if (key === "d") root.toggleDevMode()
@@ -1218,7 +1271,7 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openWorker(parent.modelData.name)
+                  onClicked: root.openWorkerDetail(parent.modelData.name)
                 }
 
                 Text {
@@ -1555,6 +1608,239 @@ Panel {
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
             text: setupView.envVar + " is set in the environment and takes precedence over anything saved here."
+          }
+        }
+      }
+
+      // ---- one Worker ---------------------------------------------------
+      Rectangle {
+        id: workerView
+        anchors.fill: parent
+        z: 14
+        visible: root.workerDetailVisible
+        color: Color.popups.background
+
+        readonly property var detail: root.workerDetail
+        readonly property var summary: workerView.detail ? workerView.detail.worker : null
+        readonly property string failure: workerView.detail
+          ? String(workerView.detail.error || "") : ""
+
+        MouseArea { anchors.fill: parent; hoverEnabled: true }
+
+        Column {
+          id: workerContent
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          spacing: Style.space(10)
+
+          Item {
+            width: parent.width
+            height: Math.max(workerBack.height, workerTitle.implicitHeight, workerOpen.height)
+
+            PanelActionButton {
+              id: workerBack
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰁍"
+              tooltipText: "Back (Esc)"
+              foreground: root.foreground
+              onClicked: root.closeWorkerDetail()
+            }
+
+            Text {
+              id: workerTitle
+              anchors.left: workerBack.right
+              anchors.leftMargin: Style.spacing.sm
+              anchors.right: workerOpen.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              color: root.foreground
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+              text: root.workerDetailName
+            }
+
+            Button {
+              id: workerOpen
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Dashboard"
+              tooltipText: "This Worker's metrics tab"
+              foreground: root.foreground
+              onClicked: root.openWorker(root.workerDetailName)
+            }
+          }
+
+          PanelSectionHeader {
+            width: parent.width
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: root.workerDetailLoading ? "LAST 24 HOURS  ·  LOADING"
+                : workerView.failure !== "" ? "LAST 24 HOURS  ·  UNAVAILABLE"
+                : "LAST 24 HOURS"
+          }
+
+          Row {
+            width: parent.width
+            visible: workerView.summary !== null
+            spacing: Style.spacing.sm
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 4) / 5
+              value: workerView.summary ? root.compact(workerView.summary.requests) : "—"
+              label: "requests"
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 4) / 5
+              value: workerView.summary ? root.percentExact(workerView.summary.success_ratio) : "—"
+              label: "success"
+              valueColor: workerView.summary && Number(workerView.summary.success_ratio) < 0.99
+                          ? Color.urgent : root.foreground
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 4) / 5
+              value: workerView.summary ? root.cpuTime(workerView.summary.cpu_p50_us) : "—"
+              label: "p50 cpu"
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 4) / 5
+              value: workerView.summary ? root.cpuTime(workerView.summary.cpu_p99_us) : "—"
+              label: "p99 cpu"
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 4) / 5
+              value: workerView.summary ? root.compact(workerView.summary.subrequests) : "—"
+              label: "subreq"
+            }
+          }
+
+          // Same bars as the zone graph, filled by errors rather than cache
+          // hits — in both cases the fill is the part of the hour worth
+          // noticing.
+          Sparkline {
+            width: parent.width
+            visible: workerView.detail !== null
+                     && (workerView.detail.series || []).length > 0
+            series: workerView.detail ? (workerView.detail.series || []) : []
+            fillKey: "errors"
+            foreground: root.foreground
+            accent: Color.urgent
+          }
+
+          PanelSeparator {
+            width: parent.width
+            visible: workerView.detail !== null
+            foreground: root.foreground
+          }
+
+          PanelSectionHeader {
+            width: parent.width
+            visible: workerView.detail !== null
+                     && (workerView.detail.statuses || []).length > 0
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: "INVOCATION STATUS"
+          }
+
+          Column {
+            width: parent.width
+            visible: workerView.detail !== null
+            spacing: 0
+
+            Repeater {
+              model: workerView.detail ? (workerView.detail.statuses || []) : []
+
+              delegate: Item {
+                required property var modelData
+                width: parent.width
+                height: Style.space(26)
+
+                readonly property bool bad: String(modelData.status || "") !== "success"
+                                            && Number(modelData.requests || 0) > 0
+
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(6)
+                  height: width
+                  radius: width / 2
+                  color: parent.bad ? root.brand : "#4ca64c"
+                  opacity: Number(parent.modelData.errors || 0) > 0 ? 1.0 : 0.7
+                  id: statusDotMark
+                }
+
+                Text {
+                  anchors.left: statusDotMark.right
+                  anchors.leftMargin: Style.spacing.sm
+                  anchors.right: statusMeta.left
+                  anchors.rightMargin: Style.spacing.sm
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  color: Number(parent.modelData.errors || 0) > 0
+                         ? Color.urgent : root.foreground
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  // Cloudflare spells these in camelCase; a space reads better
+                  // in a column than responseStreamDisconnected does.
+                  text: String(parent.modelData.status || "")
+                        .replace(/([A-Z])/g, " $1").toLowerCase().trim()
+                }
+
+                Text {
+                  id: statusMeta
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  opacity: 0.55
+                  textFormat: Text.PlainText
+                  text: {
+                    var row = parent.modelData
+                    var bits = [root.compact(row.requests) + " req"]
+                    if (Number(row.errors) > 0) bits.push(root.compact(row.errors) + " err")
+                    var cpu = root.cpuTime(row.cpu_p50_us)
+                    if (cpu !== "") bits.push(cpu)
+                    return bits.join("  ·  ")
+                  }
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            visible: workerView.failure !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: Color.urgent
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: workerView.failure
+          }
+
+          Text {
+            width: parent.width
+            visible: workerView.detail !== null && workerView.failure === ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.45
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            // The one number on this screen that is not a total, said plainly
+            // rather than left to be assumed.
+            text: "CPU figures are quantiles of the busiest status, not averages."
           }
         }
       }
