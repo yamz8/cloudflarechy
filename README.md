@@ -222,6 +222,30 @@ omarchy-shell cloudflarechy refresh
 omarchy-shell cloudflarechy toggle
 ```
 
+## Tests
+
+```bash
+./tests/run.sh
+```
+
+53 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
+a stand-in shaped like the real API. They pin the things that are easy to break
+without noticing: the write guard, the security-level save *and* its fallback,
+the analytics retry when a plan has no `uniques`, the read cache and its
+`--fresh` bypass, and that a rejected token is never written to disk.
+
+Everything runs under a temporary `HOME`, so the suite cannot touch your real
+config, cache, or wrangler login.
+
+Two honest limits. A fixture cannot tell you Cloudflare still answers this way
+— only that the plugin still does; every field in the mock was checked against
+a live account once, and that is the whole of its authority. And the suite
+covers the script, not the QML: the panel is still verified by looking at it.
+
+The assertions were checked by breaking the code on purpose and confirming
+they went red. That found a real gap — the security-level fallback was
+untested, and a sabotaged one passed 52 of 52 — which is now the 53rd test.
+
 ## Notes
 
 - Traffic comes from the GraphQL Analytics API (`httpRequests1hGroups`), which
