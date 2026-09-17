@@ -169,6 +169,7 @@ The Dashboard button is one click from all of them.
 | right-click the icon | refresh now |
 | `r` | refresh now |
 | `c` | credential screen — sign in, paste a token, or forget one |
+| `Esc` | leave the credential screen (the token field holds the keyboard while it is up) |
 | `d` | toggle Development Mode |
 | `u` | toggle Under Attack Mode |
 | `p` | purge cache (asks first) |

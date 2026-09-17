@@ -288,8 +288,11 @@ Panel {
       root.busyAction = ""
       if (!payload || payload.error) {
         root.actionFailed = true
+        // Kept with the action that failed. `hint` belongs to the credential
+        // and read errors above; borrowing it here parked a purge's advice
+        // under an unrelated message and left it there.
         root.actionStatus = payload && payload.error ? payload.error : "request failed"
-        if (payload && payload.hint) root.hint = payload.hint
+        if (payload && payload.hint) root.actionStatus += " — " + payload.hint
         return
       }
       root.actionFailed = false
@@ -647,10 +650,19 @@ Panel {
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (root.purgeConfirmOpen || root.setupVisible) return
+        if (root.purgeConfirmOpen) return
         var key = t.toLowerCase()
+        // Handled before the guard that silences the other shortcuts, so this
+        // still works while the screen is up — but only when the token field
+        // has not taken the keyboard, which it does whenever the screen opens.
+        // In practice this opens; Escape is what closes. The toggle is here for
+        // the case where focus sits elsewhere, not as the advertised way out.
+        if (key === "c") {
+          root.showSetup ? root.closeSetup() : root.openSetup()
+          return
+        }
+        if (root.setupVisible) return
         if (key === "r") root.refresh(true)
-        else if (key === "c") root.openSetup()
         else if (root.readOnly) return
         else if (key === "d") root.toggleDevMode()
         else if (key === "u") root.toggleAttack()
@@ -693,9 +705,9 @@ Panel {
               anchors.leftMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - mark.width - refreshButton.width
-                     - credentialButton.width
+                     - (credentialButton.visible ? credentialButton.width + Style.spacing.sm : 0)
                      - (dashboardButton.visible ? dashboardButton.width + Style.spacing.sm : 0)
-                     - Style.spacing.sm * 3
+                     - Style.spacing.sm * 2
               visible: root.zones.length > 1
               showLabel: false
               value: root.zoneId
@@ -715,9 +727,9 @@ Panel {
               anchors.leftMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - mark.width - refreshButton.width
-                     - credentialButton.width
+                     - (credentialButton.visible ? credentialButton.width + Style.spacing.sm : 0)
                      - (dashboardButton.visible ? dashboardButton.width + Style.spacing.sm : 0)
-                     - Style.spacing.sm * 3
+                     - Style.spacing.sm * 2
               visible: root.zones.length <= 1
               font.family: root.fontFamily
               font.pixelSize: Style.font.subtitle
@@ -742,11 +754,12 @@ Panel {
               anchors.rightMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰌋"
+              visible: root.tokenPresent
               tooltipText: root.readOnly
-                           ? "Read-only session — add an API token"
-                           : "Credential"
+                           ? "Read-only session — add an API token (c)"
+                           : "Credential (c)"
               foreground: root.readOnly ? root.brand : root.foreground
-              onClicked: root.setupVisible ? root.closeSetup() : root.openSetup()
+              onClicked: root.showSetup ? root.closeSetup() : root.openSetup()
             }
 
             PanelActionButton {
@@ -1189,6 +1202,7 @@ Panel {
         // closing the screen would leave every key going to a hidden field.
         onVisibleChanged: {
           if (setupView.visible) {
+            tokenInput.text = ""
             tokenInput.forceActiveFocus()
           } else {
             tokenInput.text = ""
