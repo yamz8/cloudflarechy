@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- The bar icon now turns the theme's urgent colour when Development Mode or
+  Under Attack Mode is on, or a tunnel is down — the whole mark, not a five
+  pixel dot on the corner of it. The widget's entire argument is that the bar
+  tells you a temporary switch is still on, and it was whispering. The colour
+  comes from `bar.urgent`, the same one the network widget uses when pings
+  drop, so it follows the theme rather than inventing an orange.
+- The dot stays as a shape cue, because a theme may set `bar.urgent` close to
+  its foreground and not everyone can tell two colours apart.
+- `attentionDot` now governs the whole signal rather than just the dot.
+
 ## 0.4.0
 
 - Show 5xx in the stats row, in place of unique visitors. A zone serving

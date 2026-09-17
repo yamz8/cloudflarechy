@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cloudflarechy",
   "name": "Cloudflarechy",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "yamz8",
   "license": "MIT",
   "description": "One Cloudflare zone from the Omarchy bar: 24h traffic, cache ratio, tunnels, and the two switches you forget to turn off",
@@ -61,9 +61,9 @@
       {
         "key": "attentionDot",
         "type": "boolean",
-        "label": "Dot on the bar icon when something needs attention",
+        "label": "Colour the bar icon when something needs attention",
         "defaultValue": true,
-        "description": "Development Mode on, Under Attack Mode on, or a tunnel down or degraded."
+        "description": "Turns the mark the theme's urgent colour and adds a dot when Development Mode or Under Attack Mode is on, or a tunnel is down or degraded. Off keeps the bar quiet."
       }
     ]
   }

@@ -7,10 +7,11 @@ needed it.
 
 ![The panel](preview.png)
 
-That last part is the reason the bar icon carries a dot. Both of those switches
-are meant to be temporary, neither is visible from the desktop, and both get
-left on for days. The dot also lights when a Cloudflare Tunnel is `down` or
-`degraded`.
+That last part is why the bar icon changes colour. Both of those switches are
+meant to be temporary, neither is visible from the desktop, and both get left on
+for days — so the whole mark turns your theme's urgent colour and grows a dot,
+rather than whispering it in five pixels. The same happens when a Cloudflare
+Tunnel is `down` or `degraded`.
 
 Everything shown comes from the Cloudflare API. Nothing is computed locally
 except the cache ratio, which is cached ÷ total over the same 24 hours.
@@ -210,7 +211,7 @@ own settings UI:
 | `refreshSeconds` | `300` | Background poll interval. The bar dot is only as fresh as this. |
 | `showTunnels` | `true` | Show the tunnels section. |
 | `showWorkers` | `true` | Show the Workers section. |
-| `attentionDot` | `true` | Dot on the bar icon when something needs attention. |
+| `attentionDot` | `true` | Colour the bar icon, and add a dot, when something needs attention. Off keeps the bar quiet. |
 
 ## From the command line
 

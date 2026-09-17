@@ -125,6 +125,21 @@ Panel {
   readonly property bool attention: root.devMode || root.underAttack
                                     || root.troubledTunnels > 0
 
+  // The bar's own alert colour, which themes set and the first-party widgets
+  // use — network turns its glyph this colour when pings drop. A plugin that
+  // invented its own orange would be the only thing in the row not following
+  // the theme.
+  readonly property color barAttention: bar ? bar.urgent : Color.urgent
+
+  // The whole mark carries the signal, not just a dot on the corner of it.
+  // This widget's entire argument is that the bar tells you a temporary switch
+  // is still on; five pixels in the corner is not telling you.
+  // `attentionDot` governs the whole signal, not just the dot. Someone who
+  // turns it off wants a quiet bar, and a red cloud with no dot on it would be
+  // the setting doing half of what it says.
+  readonly property color barIconColor: root.attention && root.attentionDot
+                                        ? root.barAttention : root.foreground
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -609,17 +624,25 @@ Panel {
         CloudMark {
           anchors.centerIn: parent
           size: Style.bar.iconCanvas
-          color: root.foreground
+          color: root.barIconColor
           opacity: root.error !== "" ? 0.45 : 1.0
+
+          // Colour alone cannot be the whole signal: a theme is free to set
+          // bar.urgent close to its foreground, and some people cannot tell
+          // the two apart at all. The dot below is the shape cue that does not
+          // depend on either.
+          Behavior on color {
+            enabled: root.bar ? root.bar.foregroundAnimationEnabled : false
+            ColorAnimation { duration: 220 }
+          }
         }
 
-        // Small, and only when something is on that should not stay on.
         Rectangle {
           visible: root.attentionDot && root.attention
           width: Style.space(5)
           height: width
           radius: width / 2
-          color: root.troubledTunnels > 0 ? Color.urgent : root.brand
+          color: root.barAttention
           anchors.right: parent.right
           anchors.top: parent.top
           anchors.rightMargin: -Style.space(1)
