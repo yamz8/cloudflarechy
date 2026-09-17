@@ -20,8 +20,13 @@ import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ZONE = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+# A zone on a plan that serves neither `uniques` nor `responseStatusMap`, so the
+# query's last fallback rung gets walked.
 ZONE2 = "b" * 32
 ACCOUNT = "0f9e8d7c6b5a40312f1e0d9c8b7a6554"
+# An account whose Workers list is readable but whose invocation analytics are
+# not — the plugin should still list the scripts.
+ACCOUNT_NO_METRICS = "1" * 32
 
 STATE = {"security_level": "high", "development_mode": 0, "purges": 0}
 
@@ -44,20 +49,29 @@ def zone_object(zone_id=ZONE, name="example.com"):
     }
 
 
-def hourly():
+def hourly(with_status=False):
     now = datetime.datetime.now(datetime.timezone.utc).replace(
         minute=0, second=0, microsecond=0)
     out = []
     for i in range(24):
         t = now - datetime.timedelta(hours=23 - i)
         requests = 400 + i * 37
-        out.append({
+        group = {
             "dimensions": {"datetime": t.strftime("%Y-%m-%dT%H:00:00Z")},
             "sum": {"requests": requests, "bytes": requests * 2400,
                     "cachedRequests": int(requests * 0.82),
                     "cachedBytes": int(requests * 2400 * 0.77),
                     "threats": i % 5},
-        })
+        }
+        if with_status:
+            # Ten 5xx and five 4xx an hour, the rest fine: enough that the
+            # totals are exact and hand-checkable.
+            group["sum"]["responseStatusMap"] = [
+                {"edgeResponseStatus": 200, "requests": requests - 15},
+                {"edgeResponseStatus": 404, "requests": 5},
+                {"edgeResponseStatus": 503, "requests": 10},
+            ]
+        out.append(group)
     return out
 
 
@@ -89,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
                                   zone_object(ZONE2, "second.dev")]))
         if path == f"/zones/{ZONE}":
             return self.reply(ok(zone_object()))
+        if path == f"/zones/{ZONE2}":
+            return self.reply(ok(zone_object(ZONE2, "second.dev")))
         if re.fullmatch(r"/zones/\w+/settings/security_level", path):
             if self.scoped_out():
                 return self.reply(denied(), 403)
@@ -101,10 +117,12 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": "t2", "name": "staging", "status": "down",
                  "connections": [], "created_at": "2026-02-02T03:04:05Z"},
             ]))
-        if path == f"/accounts/{ACCOUNT}/workers/scripts":
+        if path in (f"/accounts/{ACCOUNT}/workers/scripts",
+                    f"/accounts/{ACCOUNT_NO_METRICS}/workers/scripts"):
             return self.reply(ok([
                 {"id": "api-router", "modified_on": "2026-09-16T10:00:00Z"},
                 {"id": "image-resize", "modified_on": "2026-09-01T10:00:00Z"},
+                {"id": "cron-cleanup", "modified_on": "2026-08-01T10:00:00Z"},
             ]))
         return self.reply(denied("no route " + path, 7003), 404)
 
@@ -131,12 +149,40 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) or b"{}"
         path = self.path.split("?")[0]
         if path == "/graphql":
-            query = json.loads(raw).get("query", "")
+            body = json.loads(raw)
+            query = body.get("query", "")
+            variables = body.get("variables", {})
+
+            if "workersInvocationsAdaptive" in query:
+                if variables.get("account") == ACCOUNT_NO_METRICS:
+                    return self.reply({"data": None, "errors": [
+                        {"message": "account analytics are not readable with this token"}]})
+                return self.reply({"data": {"viewer": {"accounts": [{
+                    "workersInvocationsAdaptive": [
+                        {"dimensions": {"scriptName": "api-router", "status": "success"},
+                         "sum": {"requests": 3000, "errors": 0, "subrequests": 120},
+                         "quantiles": {"cpuTimeP50": 8644}},
+                        # A second, quieter status for the same script: requests
+                        # add up, the p50 comes from the busier one.
+                        {"dimensions": {"scriptName": "api-router", "status": "clientDisconnected"},
+                         "sum": {"requests": 40, "errors": 0, "subrequests": 0},
+                         "quantiles": {"cpuTimeP50": 99999}},
+                        {"dimensions": {"scriptName": "image-resize", "status": "scriptThrewException"},
+                         "sum": {"requests": 12, "errors": 12, "subrequests": 0},
+                         "quantiles": {"cpuTimeP50": 457}},
+                    ]}]}}, "errors": None})
+
+            # Zone analytics. uniques is never available here; the second zone
+            # additionally refuses status codes.
             if "uniques" in query:
                 return self.reply({"data": None, "errors": [
                     {"message": "field uniques is not available on this plan"}]})
+            wants_status = "responseStatusMap" in query
+            if wants_status and variables.get("zone") == ZONE2:
+                return self.reply({"data": None, "errors": [
+                    {"message": "field responseStatusMap is not available on this plan"}]})
             return self.reply({"data": {"viewer": {"zones": [
-                {"httpRequests1hGroups": hourly()}]}}, "errors": None})
+                {"httpRequests1hGroups": hourly(wants_status)}]}}, "errors": None})
         if path.endswith("/purge_cache"):
             if self.scoped_out():
                 return self.reply(denied(), 403)

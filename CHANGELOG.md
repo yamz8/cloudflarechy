@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+- Show 5xx in the stats row, in place of unique visitors. A zone serving
+  nothing but errors reports the same request count as a healthy one, so the
+  panel was rendering a failing zone as a quiet one. 4xx is counted separately
+  and deliberately not shown — a 403 is often the zone working.
+- Ask for status codes in the analytics query, and give up optional fields one
+  at a time (uniques, then status codes) rather than failing the whole query on
+  a plan that will not serve one.
+- Workers rows now show 24h invocations, errors and p50 CPU instead of a deploy
+  date, and link to that Worker's metrics tab rather than the account list.
+  Requests are summed across invocation statuses; CPU is taken from the busiest
+  status, because averaging quantiles describes nothing. A Worker with no
+  invocations keeps its deploy date rather than claiming zero requests.
+- Fix a latent layout bug: the stat values had no width and no elide, so a
+  value wider than its fifth of the row drew over its neighbour instead of
+  truncating.
+
 ## 0.3.0
 
 - Add a Connect screen. A fresh install no longer answers "no token" with a

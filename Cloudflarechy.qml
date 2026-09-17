@@ -66,6 +66,7 @@ Panel {
   property string hint: ""
   property string tunnelsError: ""
   property string workersError: ""
+  property string workersMetricsError: ""
 
   // The last write this panel asked for, and what came of it. Kept separate
   // from `error`, which is about reading: a purge that failed should not blank
@@ -143,7 +144,13 @@ Panel {
     property color valueColor: root.foreground
     spacing: 0
 
+    // Both bound to the slot and elided. A Column does not clip its children,
+    // so a value wider than its share used to draw straight over the stat
+    // beside it — invisible until some zone reported a number long enough to
+    // do it.
     Text {
+      width: stat.width
+      elide: Text.ElideRight
       font.family: root.fontFamily
       font.pixelSize: Style.font.title
       color: stat.valueColor
@@ -152,6 +159,8 @@ Panel {
     }
 
     Text {
+      width: stat.width
+      elide: Text.ElideRight
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
       color: root.foreground
@@ -256,6 +265,7 @@ Panel {
         if (!payload) return
         root.workers = payload.workers || []
         root.workersError = payload.error || ""
+        root.workersMetricsError = payload.metrics_error || ""
       }, fresh)
     }
   }
@@ -392,6 +402,12 @@ Panel {
     root.openUrl("https://dash.cloudflare.com/" + root.accountId + "/workers/services")
   }
 
+  function openWorker(name) {
+    if (root.accountId === "" || !name) { root.openWorkersDashboard(); return }
+    root.openUrl("https://dash.cloudflare.com/" + root.accountId
+                 + "/workers/services/view/" + name + "/production/metrics")
+  }
+
   function openUrl(url) {
     root.close()
     if (root.bar) root.bar.run("omarchy-launch-browser '" + url + "'")
@@ -424,6 +440,17 @@ Panel {
     var n = Number(ratio || 0)
     if (!isFinite(n)) return "0%"
     return Math.round(n * 100) + "%"
+  }
+
+  // Worker CPU arrives in microseconds. A p50 of 8644 is 8.6ms, and printing
+  // it raw would be six digits of noise in a column that has room for five
+  // characters.
+  function cpuTime(microseconds) {
+    var n = Number(microseconds || 0)
+    if (!isFinite(n) || n <= 0) return ""
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "s"
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "ms"
+    return Math.round(n) + "µs"
   }
 
   function shortDuration(seconds) {
@@ -859,14 +886,20 @@ Panel {
               label: "served"
             }
 
-            // Uniques are not readable on every plan, and a hard 0 would read
-            // as "nobody came" rather than "not measured here".
+            // The slot visitors used to hold. A zone serving nothing but 5xx
+            // reports the same request count as a healthy one, so without this
+            // the panel renders a failing zone as a quiet one — and visitors is
+            // the stat you would least act on. 4xx stays out of it: a 403 or a
+            // 404 is often the zone working exactly as told.
             Stat {
               width: (parent.width - Style.spacing.sm * 4) / 5
               value: root.analytics
-                     ? (root.analytics.uniques_known ? root.compact(root.analytics.uniques) : "—")
+                     ? (root.analytics.statuses_known
+                        ? root.compact(root.analytics.server_errors) : "—")
                      : "—"
-              label: "visitors"
+              label: "5xx"
+              valueColor: root.analytics && Number(root.analytics.server_errors) > 0
+                          ? Color.urgent : root.foreground
             }
 
             Stat {
@@ -1133,7 +1166,7 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openWorkersDashboard()
+                  onClicked: root.openWorker(parent.modelData.name)
                 }
 
                 Text {
@@ -1157,13 +1190,40 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  color: root.foreground
-                  opacity: 0.5
+                  color: Number(parent.modelData.errors || 0) > 0
+                         ? Color.urgent : root.foreground
+                  opacity: Number(parent.modelData.errors || 0) > 0 ? 1.0 : 0.5
                   textFormat: Text.PlainText
-                  text: root.ago(parent.modelData.modified_on)
+                  // A Worker with no invocations in the window has no metrics
+                  // row at all, which is not the same as one that ran zero
+                  // times and reported it — so that case falls back to saying
+                  // when it was last deployed.
+                  text: {
+                    var w = parent.modelData
+                    if (w.requests === undefined || w.requests === null)
+                      return root.ago(w.modified_on)
+                    var bits = [root.compact(w.requests) + " req"]
+                    if (Number(w.errors) > 0) bits.push(root.compact(w.errors) + " err")
+                    var cpu = root.cpuTime(w.cpu_p50_us)
+                    if (cpu !== "") bits.push(cpu)
+                    return bits.join("  ·  ")
+                  }
                 }
               }
             }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.showWorkers && root.workersMetricsError !== ""
+                     && root.workers.length > 0
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.5
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Showing deploy dates — Workers traffic needs Account → Account Analytics → Read."
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }

@@ -17,7 +17,9 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT="$HERE/../bin/cloudflarechy"
 PORT="${CLOUDFLARECHY_TEST_PORT:-18787}"
 ZONE=a1b2c3d4e5f60718293a4b5c6d7e8f90
+ZONE2=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ACCOUNT=0f9e8d7c6b5a40312f1e0d9c8b7a6554
+ACCOUNT_NO_METRICS=11111111111111111111111111111111
 
 passed=0
 failed=0
@@ -122,13 +124,52 @@ assert_eq "a plan without uniques still returns traffic" "false" "$(field '.anal
 assert_eq "  ... rather than claiming zero visitors" "0" "$(field '.analytics.uniques' <<<"$out")"
 assert_eq "the zone's security level is read" "high" "$(field '.security_level' <<<"$out")"
 
+# 10 fives and 5 fours an hour for 24 hours, against 19812 requests.
+assert_eq "server errors are counted" "240" "$(field '.analytics.server_errors' <<<"$out")"
+assert_eq "  ... separately from client errors" "120" "$(field '.analytics.client_errors' <<<"$out")"
+assert_eq "  ... and kept per code, summed over the window" "240" \
+  "$(field '.analytics.statuses["503"]' <<<"$out")"
+assert_eq "  ... including the successful ones" "19452" \
+  "$(field '.analytics.statuses["200"]' <<<"$out")"
+assert_eq "  ... as a share of traffic" "1.21" \
+  "$(field '(.analytics.error_ratio * 10000 | round) / 100' <<<"$out")"
+assert_eq "status codes are marked as known" "true" "$(field '.analytics.statuses_known' <<<"$out")"
+
+# The second zone's plan serves neither optional field, which walks the query
+# down to its last rung.
+out2=$(run --fresh overview "$ZONE2")
+assert_eq "a plan with no status codes still returns traffic" "19812" \
+  "$(field '.analytics.requests' <<<"$out2")"
+assert_eq "  ... and says the codes are unknown" "false" \
+  "$(field '.analytics.statuses_known' <<<"$out2")"
+assert_eq "  ... rather than reporting zero 5xx as fact" "0" \
+  "$(field '.analytics.server_errors' <<<"$out2")"
+assert_eq "  ... with no error surfaced" "" "$(field '.analytics_error' <<<"$out2")"
+
 out=$(run --fresh tunnels "$ACCOUNT")
 assert_eq "tunnels are listed" "2" "$(field '.tunnels | length' <<<"$out")"
 assert_eq "  ... with connection counts" "2" "$(field '.tunnels[0].connections' <<<"$out")"
 assert_eq "  ... and a status" "down" "$(field '.tunnels[1].status' <<<"$out")"
 
 out=$(run --fresh workers "$ACCOUNT")
-assert_eq "workers are newest first" "api-router" "$(field '.workers[0].name' <<<"$out")"
+assert_eq "workers are busiest first" "api-router" "$(field '.workers[0].name' <<<"$out")"
+assert_eq "  ... with requests summed across statuses" "3040" "$(field '.workers[0].requests' <<<"$out")"
+assert_eq "  ... and the p50 of the busiest status, not an average" "8644" \
+  "$(field '.workers[0].cpu_p50_us' <<<"$out")"
+assert_eq "  ... and subrequests" "120" "$(field '.workers[0].subrequests' <<<"$out")"
+assert_eq "a failing worker reports its errors" "12" \
+  "$(field '.workers | map(select(.name == "image-resize"))[0].errors' <<<"$out")"
+# A script nobody invoked has no analytics row at all, which is not the same as
+# one that ran zero times — it must not be rendered as "0 req".
+assert_eq "an uninvoked worker has no request count" "null" \
+  "$(field '.workers | map(select(.name == "cron-cleanup"))[0].requests' <<<"$out")"
+assert_eq "  ... and sorts last" "cron-cleanup" "$(field '.workers[-1].name' <<<"$out")"
+
+# Workers analytics need a scope the script list does not.
+out=$(run --fresh workers "$ACCOUNT_NO_METRICS")
+assert_eq "without analytics the scripts are still listed" "3" "$(field '.workers | length' <<<"$out")"
+assert_contains "  ... and the reason is reported" "not readable" "$(field '.metrics_error' <<<"$out")"
+assert_eq "  ... with no invented traffic" "null" "$(field '.workers[0].requests' <<<"$out")"
 
 echo
 echo "writes"

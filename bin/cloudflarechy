@@ -407,22 +407,26 @@ zone_analytics() {
   vars=$("$JQ" -n --arg z "$zone" --arg s "$since" --arg u "$till" \
     '{zone: $z, since: $s, until: $u}')
 
-  raw=$(gql "$(analytics_query with_uniques)" "$vars")
-  err=$(gql_error "$raw")
-  # `uniq { uniques }` is not readable on every plan, and GraphQL fails the
-  # whole query over one unavailable field — so drop it and ask again rather
-  # than reporting no traffic at all.
-  if [[ -n $err ]]; then
-    local retry retry_err
-    retry=$(gql "$(analytics_query plain)" "$vars")
-    retry_err=$(gql_error "$retry")
-    if [[ -z $retry_err ]]; then raw="$retry"; err=""; fi
-  fi
+  # Ask for everything, then give up one optional field at a time. Neither
+  # `uniq { uniques }` nor `responseStatusMap` is readable on every plan, and
+  # GraphQL fails the whole query over one it will not serve — so a zone that
+  # cannot report visitors should still get its traffic, and one that cannot
+  # report status codes should still get both.
+  local attempt
+  err="no analytics attempt ran"
+  for attempt in "yes yes" "no yes" "yes no" "no no"; do
+    # shellcheck disable=SC2086
+    raw=$(gql "$(analytics_query $attempt)" "$vars")
+    err=$(gql_error "$raw")
+    [[ -z $err ]] && break
+  done
 
   if [[ -n $err ]]; then
     "$JQ" -n --arg e "$err" '{
       error: $e, requests: 0, cached_requests: 0, bytes: 0, cached_bytes: 0,
-      threats: 0, uniques: 0, cache_ratio: 0, series: [], uniques_known: false
+      threats: 0, uniques: 0, cache_ratio: 0, series: [], uniques_known: false,
+      server_errors: 0, client_errors: 0, statuses: {}, statuses_known: false,
+      error_ratio: 0
     }'
     return
   fi
@@ -431,6 +435,14 @@ zone_analytics() {
     ((.data.viewer.zones // [])[0].httpRequests1hGroups // []) as $g
     | ([$g[] | .sum.requests // 0]       | add // 0) as $requests
     | ([$g[] | .sum.cachedRequests // 0] | add // 0) as $cached
+    # Every status the edge returned, summed across the window. A zone serving
+    # nothing but 5xx has exactly the same request count as a healthy one, so
+    # without this the panel cannot tell them apart.
+    | (reduce ($g[] | (.sum.responseStatusMap // [])[]) as $s
+        ({}; .[$s.edgeResponseStatus | tostring] += ($s.requests // 0))) as $statuses
+    | ([$statuses | to_entries[] | select(.key | startswith("5")) | .value] | add // 0) as $server_errors
+    | ([$statuses | to_entries[] | select(.key | startswith("4")) | .value] | add // 0) as $client_errors
+    | ($statuses | length > 0) as $statuses_known
     | {
         requests:        $requests,
         cached_requests: $cached,
@@ -440,6 +452,13 @@ zone_analytics() {
         uniques:         ([$g[] | .uniq.uniques // 0]    | add // 0),
         uniques_known:   ([$g[] | .uniq.uniques // null] | map(select(. != null)) | length) > 0,
         cache_ratio:     (if $requests > 0 then ($cached / $requests) else 0 end),
+        # 5xx is the zone failing. 4xx is often the zone working — a block or a
+        # 404 — so the two are never added together.
+        server_errors:   $server_errors,
+        client_errors:   $client_errors,
+        statuses:        $statuses,
+        statuses_known:  $statuses_known,
+        error_ratio:     (if $requests > 0 then ($server_errors / $requests) else 0 end),
         series: [ $g[] | {
           t:        (.dimensions.datetime // ""),
           requests: (.sum.requests // 0),
@@ -450,9 +469,12 @@ zone_analytics() {
       }' <<<"$raw"
 }
 
+# Two optional blocks, because plan availability differs per field and GraphQL
+# fails the whole query over one it will not serve.
 analytics_query() {
-  local uniq=""
-  [[ ${1:-} == with_uniques ]] && uniq="uniq { uniques }"
+  local uniq="" status=""
+  [[ ${1:-} == yes ]] && uniq="uniq { uniques }"
+  [[ ${2:-} == yes ]] && status="responseStatusMap { edgeResponseStatus requests }"
   cat <<QUERY
 query (\$zone: String!, \$since: Time!, \$until: Time!) {
   viewer {
@@ -463,7 +485,7 @@ query (\$zone: String!, \$since: Time!, \$until: Time!) {
         filter: {datetime_geq: \$since, datetime_lt: \$until}
       ) {
         dimensions { datetime }
-        sum { requests bytes cachedRequests cachedBytes threats }
+        sum { requests bytes cachedRequests cachedBytes threats $status }
         $uniq
       }
     }
@@ -512,13 +534,88 @@ cmd_workers() {
     "$JQ" -n --arg e "$err" '{workers: [], error: $e, hint: "The token needs Account → Workers Scripts → Read."}'
     return
   fi
-  "$JQ" '{
-    workers: [ (.result // [])[] | {
-      name:        (.id // ""),
+
+  # A deploy date says when you last touched a Worker. Invocations say whether
+  # anyone is using it — which is the question you would open the dashboard to
+  # answer, and the one thing a list of names cannot tell you.
+  local metrics
+  metrics=$(worker_metrics "$account")
+
+  "$JQ" --argjson metrics "$metrics" '{
+    workers: [ (.result // [])[] | (.id // "") as $name | {
+      name:        $name,
       modified_on: (.modified_on // ""),
       placement:   (.placement_mode // "")
-    } ] | sort_by(.modified_on) | reverse
+    } + (($metrics.scripts // {})[$name] // {}) ]
+      | sort_by(.requests // -1, .modified_on) | reverse,
+    metrics_error: ($metrics.error // "")
   }' <<<"$raw" | cache_and_print "workers.$account.json"
+}
+
+# Per-script invocation totals for the last 24 hours.
+#
+# Rows arrive split by status — success, clientDisconnected, scriptThrewException
+# and so on — so requests and errors are summed across them. CPU time cannot be:
+# a quantile is not an average, and averaging two p50s produces a number that
+# describes nothing. The p50 reported is the one from the busiest status for that
+# script, which is the population the figure actually came from.
+worker_metrics() {
+  local account="$1" since till raw err
+  since=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  till=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  if [[ -z $since || -z $till ]]; then
+    "$JQ" -n '{scripts: {}, error: "could not compute a time window"}'
+    return
+  fi
+
+  local query vars
+  query='query ($account: String!, $since: Time!, $until: Time!) {
+  viewer {
+    accounts(filter: {accountTag: $account}) {
+      workersInvocationsAdaptive(
+        limit: 200
+        filter: {datetime_geq: $since, datetime_lt: $until}
+      ) {
+        dimensions { scriptName status }
+        sum { requests errors subrequests }
+        quantiles { cpuTimeP50 }
+      }
+    }
+  }
+}'
+  vars=$("$JQ" -n --arg a "$account" --arg s "$since" --arg u "$till" \
+    '{account: $a, since: $s, until: $u}')
+
+  raw=$(gql "$query" "$vars")
+  err=$(gql_error "$raw")
+  if [[ -n $err ]]; then
+    # The list of Workers is still worth showing without their traffic.
+    "$JQ" -n --arg e "$err" '{scripts: {}, error: $e}'
+    return
+  fi
+
+  "$JQ" '
+    ((.data.viewer.accounts // [])[0].workersInvocationsAdaptive // []) as $rows
+    | {
+        scripts: (
+          reduce $rows[] as $r ({};
+            ($r.dimensions.scriptName // "") as $name
+            | ($r.sum.requests // 0) as $requests
+            | .[$name] = {
+                requests:    ((.[$name].requests // 0) + $requests),
+                errors:      ((.[$name].errors // 0) + ($r.sum.errors // 0)),
+                subrequests: ((.[$name].subrequests // 0) + ($r.sum.subrequests // 0)),
+                # Keep the p50 belonging to the busiest status seen so far.
+                cpu_p50_us:  (if $requests >= (.[$name].busiest // -1)
+                              then ($r.quantiles.cpuTimeP50 // 0)
+                              else (.[$name].cpu_p50_us // 0) end),
+                busiest:     (if $requests >= (.[$name].busiest // -1)
+                              then $requests else (.[$name].busiest // 0) end)
+              })
+          | with_entries(.value |= del(.busiest))
+        ),
+        error: ""
+      }' <<<"$raw"
 }
 
 # ---------------------------------------------------------------- setting up

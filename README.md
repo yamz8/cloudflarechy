@@ -89,7 +89,8 @@ token can be minted with exactly those:
 | Zone → Zone Settings → Edit | flipping those two switches | they stay read-only |
 | Zone → Cache Purge → Purge | Purge cache | the button errors |
 | Account → Cloudflare Tunnel → Read | the tunnels list | section hidden, reason shown |
-| Account → Workers Scripts → Read | recent Workers | section hidden |
+| Account → Workers Scripts → Read | the Workers list | section hidden |
+| Account → Account Analytics → Read | Workers traffic and CPU | deploy dates instead, and says so |
 
 Read-only is a perfectly good way to run this: grant the Read scopes and the
 panel becomes a dashboard whose buttons simply say why they cannot act.
@@ -129,9 +130,14 @@ and the only way the bar dot stays honest while you are not looking.
 
 ## What it shows
 
-**Last 24 hours** — requests, share served from cache, bytes served, unique
-visitors, threats blocked, then one bar per hour. Each bar is that hour's
-requests; the filled part at its foot is the share that came from cache.
+**Last 24 hours** — requests, share served from cache, bytes served, **5xx**,
+threats blocked, then one bar per hour. Each bar is that hour's requests; the
+filled part at its foot is the share that came from cache.
+
+`5xx` is there because a zone serving nothing but errors reports exactly the
+same request count as a healthy one — without it, a failing zone renders as a
+quiet one. 4xx is counted separately and not shown: a 403 or a 404 is often the
+zone doing precisely what it was told, while a 503 never is.
 
 Bar heights are square-rooted, scaled against the busiest hour in the window.
 Two real shapes settled that. A zone idling at 16 requests an hour took a
@@ -141,8 +147,9 @@ that day and ruins every ordinary one, drawing a normal 3x variation as a wall
 of identical bars. Square root survives both. The graph is there to show shape;
 the exact figures sit above it and are not derived from it.
 
-`visitors` shows `—` rather than `0` when the plan does not expose uniques —
-those are different facts.
+Where a plan does not expose a field, the panel shows `—` rather than `0` —
+those are different facts. The analytics query gives up `uniques` and then
+status codes one at a time rather than failing whole.
 
 **Zone** — Development Mode (with the countdown Cloudflare is running; it
 expires by itself after three hours), Under Attack Mode, and Purge cache, which
@@ -155,7 +162,21 @@ the moment it is raised. If the plugin has no record, it falls back to `medium`.
 **Tunnels** — every `cfd_tunnel` on the account, its status and its connection
 count, which is what separates "healthy" from "healthy, on one leg".
 
-**Workers** — the five most recently deployed scripts.
+**Workers** — the five busiest scripts, with 24h invocations, errors and p50
+CPU time:
+
+```
+pokachy              4.2K req · 8.6ms
+api-cors-preflight   3.6K req · 458µs
+cron-cleanup                    18d ago
+```
+
+Requests are summed across invocation statuses. CPU is not — a quantile is not
+an average, and averaging two p50s describes nothing — so the figure shown is
+the p50 of the busiest status for that script. A Worker with no invocations in
+the window has no analytics row at all, which is different from one that ran
+zero times, so it falls back to saying when it was last deployed. Clicking a
+row opens that Worker's metrics tab, not the account-wide list.
 
 Deliberately absent: DNS records, firewall rules, R2, Pages. Those are editing
 surfaces, and editing them from a popup you opened by accident is a bad idea.
@@ -229,11 +250,13 @@ omarchy-shell cloudflarechy toggle
 ./tests/run.sh
 ```
 
-53 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
+72 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
 a stand-in shaped like the real API. They pin the things that are easy to break
 without noticing: the write guard, the security-level save *and* its fallback,
-the analytics retry when a plan has no `uniques`, the read cache and its
-`--fresh` bypass, and that a rejected token is never written to disk.
+the analytics query giving up one optional field at a time, 4xx never being
+counted as 5xx, Workers CPU coming from the busiest status rather than an
+average of quantiles, the read cache and its `--fresh` bypass, and that a
+rejected token is never written to disk.
 
 Everything runs under a temporary `HOME`, so the suite cannot touch your real
 config, cache, or wrangler login.
@@ -243,9 +266,10 @@ Two honest limits. A fixture cannot tell you Cloudflare still answers this way
 a live account once, and that is the whole of its authority. And the suite
 covers the script, not the QML: the panel is still verified by looking at it.
 
-The assertions were checked by breaking the code on purpose and confirming
-they went red. That found a real gap — the security-level fallback was
-untested, and a sabotaged one passed 52 of 52 — which is now the 53rd test.
+The assertions were checked by breaking the code on purpose and confirming they
+went red. That found a real gap the first time — the security-level fallback
+was untested, and a sabotaged one passed 52 of 52 — and the suite has since
+caught a refactor that silently deleted three functions.
 
 ## Notes
 
