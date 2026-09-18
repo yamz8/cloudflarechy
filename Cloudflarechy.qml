@@ -149,6 +149,72 @@ Panel {
   readonly property bool accountSectionVisible: root.tunnelsSectionVisible
     || root.workersSectionVisible
 
+  // How many rows a list section will show before it starts summarising. The
+  // panel is capped at the same height as every other first-party popup, and
+  // three sections that each grow without limit do not fit in it — an account
+  // with twenty Workers used to render twenty rows, most of them below the
+  // fold and reachable only by wheel.
+  //
+  // What gets cut matters more than how much. Each list is ranked so the rows
+  // worth opening the panel for are the ones that survive: a tunnel that is
+  // down, a Worker that is throwing. The count in the heading stays the true
+  // total either way.
+  readonly property int listCap: 3
+
+  function tunnelRank(t) {
+    var status = String((t && t.status) || "")
+    if (status === "down") return 2
+    if (status === "degraded") return 1
+    return 0
+  }
+
+  function workerRank(w) {
+    if (!w) return -1
+    if (Number(w.errors || 0) > 0) return 2
+    if (Number(w.requests || 0) > 0) return 1
+    return 0
+  }
+
+  function routeRank(r) {
+    return r && String(r.script || "") !== "" ? 1 : 0
+  }
+
+  // Decorated with the original position so equal ranks keep the order the API
+  // gave them, which is already sorted by name or pattern. Array.sort is not
+  // required to be stable and QV4 does not promise it, so the tie-break is
+  // carried explicitly rather than hoped for.
+  function rankedBy(items, rank) {
+    var all = items || []
+    var marked = []
+    for (var i = 0; i < all.length; i++)
+      marked.push({ item: all[i], at: i, rank: rank(all[i]) })
+    marked.sort(function(a, b) {
+      return b.rank !== a.rank ? b.rank - a.rank : a.at - b.at
+    })
+    var out = []
+    for (var j = 0; j < marked.length; j++) out.push(marked[j].item)
+    return out
+  }
+
+  // One hidden row is not worth hiding: "+1 more" costs the same line the row
+  // itself would have.
+  function capList(items) {
+    var all = items || []
+    return all.length <= root.listCap + 1 ? all : all.slice(0, root.listCap)
+  }
+
+  function hiddenCount(items) {
+    var all = items || []
+    return all.length <= root.listCap + 1 ? 0 : all.length - root.listCap
+  }
+
+  readonly property var shownTunnels: root.capList(root.rankedBy(root.tunnels, root.tunnelRank))
+  readonly property int hiddenTunnels: root.hiddenCount(root.tunnels)
+  readonly property var shownWorkers: root.capList(root.rankedBy(root.workers, root.workerRank))
+  readonly property int hiddenWorkers: root.hiddenCount(root.workers)
+  readonly property var shownRoutes: root.capList(root.rankedBy(root.routes, root.routeRank))
+  readonly property int hiddenRoutes: root.hiddenCount(root.routes)
+
   // The one Workers view that genuinely belongs under a zone picker: which
   // scripts run on this domain. The account-wide script list lives below the
   // scope break with the tunnels.
@@ -202,6 +268,45 @@ Panel {
   // month grid needs it; nothing here does, and a bar full of popups that
   // each pick their own width looks like an accident.
   readonly property int panelContentWidth: Style.space(380)
+
+  // The tail of a capped list. Says how many rows it is standing in for and
+  // opens the place where all of them live, so the cap never becomes a dead
+  // end.
+  component MoreRow: Rectangle {
+    id: more
+    property int count: 0
+    property string destination: ""
+    signal activated
+
+    width: parent ? parent.width : 0
+    height: more.count > 0 ? Style.space(22) : 0
+    visible: more.count > 0
+    radius: Style.cornerRadius / 2
+    color: moreHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+
+    MouseArea {
+      id: moreHover
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: more.activated()
+    }
+
+    Text {
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.rowPaddingX
+      anchors.right: parent.right
+      anchors.rightMargin: Style.spacing.rowPaddingX
+      anchors.verticalCenter: parent.verticalCenter
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      color: root.foreground
+      opacity: moreHover.containsMouse ? 0.8 : 0.45
+      elide: Text.ElideRight
+      textFormat: Text.PlainText
+      text: more.count + " more" + (more.destination !== "" ? "  \u00b7  " + more.destination : "")
+    }
+  }
 
   // One number, what it counts, and how it compares. Three of these share a
   // row, so the value carries the weight and the rest stays out of its way.
@@ -657,12 +762,19 @@ Panel {
     return Qt.formatDateTime(when, "HH:mm")
   }
 
+  // Which credential is answering, in as few words as say it. The footer is
+  // one line of provenance under a panel of numbers, and the full path of the
+  // token file wrapped it onto two — the credential screen already prints the
+  // path in full, and that is where you go when you want to change it. What
+  // matters here is only which of the four sources is in use.
   readonly property string tokenLabel: {
     if (root.tokenSource === "") return ""
-    var label = "token: " + root.tokenSource
+    var source = root.tokenSource
+    if (source === "wrangler") source = "wrangler"
+    else if (source.indexOf("/") >= 0) source = "saved token"
+    else source = "$" + source
     var expiry = root.localTime(root.tokenExpiresAt)
-    if (expiry !== "") label += " until " + expiry
-    return label
+    return expiry !== "" ? source + " until " + expiry : source
   }
 
   function tunnelColor(status) {
@@ -852,11 +964,15 @@ Panel {
     open: root.opened
     focusTarget: root.setupVisible ? tokenInput : keyCatcher
     contentWidth: panel.fittedContentWidth(root.panelContentWidth)
+    // No fixed cap. The agents panel caps at 640 because its content is a
+    // known size; this one carries three lists that grow with the account, and
+    // the first-party panel of that shape — network — lets the screen be the
+    // limit instead. A cap here just moved rows below a fold with nothing to
+    // say they were there. The per-list cap above is what keeps it sane.
     contentHeight: panel.fittedContentHeight(
                      root.setupVisible ? setupContent.implicitHeight
                      : root.workerDetailVisible ? workerContent.implicitHeight
-                     : column.implicitHeight,
-                     Style.space(640))
+                     : column.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -1378,7 +1494,7 @@ Panel {
             spacing: 0
 
             Repeater {
-              model: root.routes
+              model: root.shownRoutes
 
               delegate: Rectangle {
                 required property var modelData
@@ -1436,6 +1552,12 @@ Panel {
                 }
               }
             }
+
+            MoreRow {
+              count: root.hiddenRoutes
+              destination: "dashboard"
+              onActivated: root.openDashboard()
+            }
           }
 
           // ---- account scope ----------------------------------------------
@@ -1479,7 +1601,7 @@ Panel {
             spacing: 0
 
             Repeater {
-              model: root.tunnels
+              model: root.shownTunnels
 
               delegate: Rectangle {
                 required property var modelData
@@ -1541,6 +1663,12 @@ Panel {
                 }
               }
             }
+
+            MoreRow {
+              count: root.hiddenTunnels
+              destination: "Zero Trust"
+              onActivated: root.openTunnelsDashboard()
+            }
           }
 
           Text {
@@ -1579,7 +1707,7 @@ Panel {
             Repeater {
               // Newest deploys first, capped: this is a "what did I ship
               // lately" list, not a directory.
-              model: root.workers.slice(0, 5)
+              model: root.shownWorkers
 
               delegate: Rectangle {
                 required property var modelData
@@ -1637,6 +1765,12 @@ Panel {
                   }
                 }
               }
+            }
+
+            MoreRow {
+              count: root.hiddenWorkers
+              destination: "dashboard"
+              onActivated: root.openWorkersDashboard()
             }
           }
 

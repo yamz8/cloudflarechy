@@ -134,6 +134,14 @@ and the only way the bar dot stays honest while you are not looking.
 
 ## What it shows
 
+Each list shows three rows and then says how many it is standing in for —
+`2 more · Zero Trust` — and the tail opens the dashboard page where all of
+them live. What gets cut matters more than how much, so the rows are ranked
+first: a tunnel that is down outranks one that is healthy, a Worker that is
+throwing outranks one that is quiet. The count in each heading is always the
+true total. Four items show all four, because `+1 more` costs the same line
+the row itself would have.
+
 **Routes** — which Workers answer for this domain, and on what pattern. This is
 zone-scoped: it changes with the zone picker, unlike the Workers list below the
 account break, which is every script in the account. The same Worker can appear

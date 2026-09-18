@@ -2,6 +2,19 @@
 
 ## 0.8.0
 
+- The panel fits again. It was capped at the same fixed height as the agents
+  panel, whose content is a known size; this one carries three lists that grow
+  with the account, and rows were being pushed below a fold with nothing to
+  say they were there. It now sizes to its content the way the network panel
+  does, and the screen is the only limit.
+- Each list shows three rows, ranked so the rows worth opening the panel for
+  survive the cut — a tunnel that is down, a Worker that is throwing — then
+  says how many it is standing in for and opens the page that has them all.
+  Workers used to truncate at five silently while the heading claimed the full
+  count.
+- The footer names the credential instead of printing its path, which was
+  wrapping one line of provenance onto two. The credential screen still shows
+  the path in full, which is where you go to change it.
 - A Worker nobody called reads as idle rather than broken. Its success rate
   was rendering as `0%` in red, which says every invocation failed when the
   truth is that none happened; it now shows `—` and the screen says so.
