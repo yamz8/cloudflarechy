@@ -191,12 +191,13 @@ Panel {
   // each pick their own width looks like an accident.
   readonly property int panelContentWidth: Style.space(380)
 
-  // One number and what it counts. Five of these share a row, so the value
-  // carries the weight and the label stays out of its way.
+  // One number, what it counts, and how it compares. Three of these share a
+  // row, so the value carries the weight and the rest stays out of its way.
   component Stat: Column {
     id: stat
     property string value: ""
     property string label: ""
+    property string delta: ""
     property color valueColor: root.foreground
     spacing: 0
 
@@ -223,6 +224,23 @@ Panel {
       opacity: 0.5
       textFormat: Text.PlainText
       text: stat.label
+    }
+
+    // Its own line rather than beside the value: at a third of 380px there is
+    // no room for both, and stacking keeps the three deltas aligned with each
+    // other. Deliberately uncoloured — more requests can be growth or an
+    // attack, and the panel should not claim to know which. Colour stays with
+    // the states that are unambiguous.
+    Text {
+      width: stat.width
+      visible: stat.delta !== ""
+      elide: Text.ElideRight
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      color: root.foreground
+      opacity: 0.45
+      textFormat: Text.PlainText
+      text: stat.delta
     }
   }
 
@@ -527,6 +545,30 @@ Panel {
     var n = Number(ratio || 0)
     if (!isFinite(n)) return "0%"
     return Math.round(n * 100) + "%"
+  }
+
+  // Period-over-period change, as a share of the earlier value. That is what
+  // Cloudflare's own cards report — their cache-hit-rate card reads 0.97% with
+  // a 56.3% fall, which is impossible as a difference in points and exact as a
+  // relative one.
+  //
+  // A null arrives when there was no earlier period to compare against, and
+  // null is not zero: "unchanged" and "nothing to compare" are different
+  // answers, so one draws nothing at all.
+  function deltaText(value) {
+    if (value === null || value === undefined || value === "") return ""
+    var n = Number(value)
+    if (!isFinite(n)) return ""
+    var pct = n * 100
+    var size = Math.abs(pct)
+    // Under a twentieth of a percent an arrow would claim a direction the
+    // measurement does not support.
+    if (size < 0.05) return "flat"
+    // One decimal throughout, so three deltas sitting in a row are read at a
+    // glance instead of compared digit by digit. Past a tenfold change the
+    // decimal is noise and the number is the headline anyway.
+    var shown = size >= 1000 ? String(Math.round(size)) : size.toFixed(1)
+    return (pct > 0 ? "\u2197 " : "\u2198 ") + shown + "%"
   }
 
   // Worker CPU arrives in microseconds. A p50 of 8644 is 8.6ms, and printing
@@ -973,9 +1015,16 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
-            text: root.analyticsError !== "" ? "LAST 24 HOURS  ·  UNAVAILABLE"
-                : root.analytics ? "LAST 24 HOURS"
-                : "LAST 24 HOURS  ·  LOADING"
+            // The arrows are meaningless without their baseline, so the
+            // header names it rather than leaving it to a tooltip the bar
+            // has no room for.
+            text: {
+              if (root.analyticsError !== "") return "LAST 24 HOURS  ·  UNAVAILABLE"
+              if (!root.analytics) return "LAST 24 HOURS  ·  LOADING"
+              return root.analytics.comparison
+                     ? "LAST 24 HOURS  ·  VS PREVIOUS"
+                     : "LAST 24 HOURS"
+            }
           }
 
           // Three slots, not five. At this width five stats leave 76px each,
@@ -991,12 +1040,14 @@ Panel {
               width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.compact(root.analytics.requests) : "—"
               label: "requests"
+              delta: root.analytics ? root.deltaText(root.analytics.requests_delta) : ""
             }
 
             Stat {
               width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.percent(root.analytics.cache_ratio) : "—"
               label: "cached"
+              delta: root.analytics ? root.deltaText(root.analytics.cache_ratio_delta) : ""
               valueColor: root.brand
             }
 
@@ -1004,6 +1055,7 @@ Panel {
               width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.bytes(root.analytics.bytes) : "—"
               label: "served"
+              delta: root.analytics ? root.deltaText(root.analytics.bytes_delta) : ""
             }
           }
 

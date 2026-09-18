@@ -20,6 +20,7 @@ ZONE=a1b2c3d4e5f60718293a4b5c6d7e8f90
 ZONE2=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ACCOUNT=0f9e8d7c6b5a40312f1e0d9c8b7a6554
 ACCOUNT_NO_METRICS=11111111111111111111111111111111
+ZONE_NEW=cccccccccccccccccccccccccccccccc
 
 passed=0
 failed=0
@@ -112,7 +113,7 @@ assert_eq "an API token outranks wrangler" "api" "$(field .token_kind <<<"$out")
 assert_eq "  ... and is not read-only" "false" "$(field .read_only <<<"$out")"
 
 out=$(run --fresh zones)
-assert_eq "zones are listed" "2" "$(field '.zones | length' <<<"$out")"
+assert_eq "zones are listed" "3" "$(field '.zones | length' <<<"$out")"
 assert_eq "  ... with the account attached" "$ACCOUNT" "$(field '.zones[0].account_id' <<<"$out")"
 assert_eq "  ... and the plan" "Free Website" "$(field '.zones[0].plan' <<<"$out")"
 
@@ -135,6 +136,30 @@ assert_eq "  ... as a share of traffic" "1.21" \
   "$(field '(.analytics.error_ratio * 10000 | round) / 100' <<<"$out")"
 assert_eq "status codes are marked as known" "true" "$(field '.analytics.statuses_known' <<<"$out")"
 
+# The window is fetched 48 hours wide and split on its midpoint, so the graph
+# must stay 24 buckets and the status totals must cover only the recent half —
+# a split that leaked the baseline would inflate both.
+assert_eq "the baseline is compared, not drawn" "24" \
+  "$(field '.analytics.series | length' <<<"$out")"
+assert_eq "  ... and not counted into the totals" "19812" \
+  "$(field '.analytics.requests' <<<"$out")"
+
+# 19812 requests against 13208 in the 24 hours before them: exactly +50%.
+assert_eq "requests carry a period-over-period delta" "0.5" \
+  "$(field '.analytics.requests_delta' <<<"$out")"
+assert_eq "  ... and so do bytes" "0.5" \
+  "$(field '.analytics.bytes_delta' <<<"$out")"
+assert_eq "  ... with the baseline reported alongside" "13208" \
+  "$(field '.analytics.previous.requests' <<<"$out")"
+assert_eq "  ... and the period named" "previous 24 hours" \
+  "$(field '.analytics.comparison' <<<"$out")"
+
+# 0.82 against 0.41 is a doubling of the ratio, so the delta is relative and
+# not a difference in points — which is what Cloudflare's own cards report. A
+# delta computed in points would read as 41, not 1.0.
+assert_eq "the cache ratio moves relatively, not in points" "1.0044" \
+  "$(field '(.analytics.cache_ratio_delta * 10000 | round) / 10000' <<<"$out")"
+
 # The second zone's plan serves neither optional field, which walks the query
 # down to its last rung.
 out2=$(run --fresh overview "$ZONE2")
@@ -145,6 +170,20 @@ assert_eq "  ... and says the codes are unknown" "false" \
 assert_eq "  ... rather than reporting zero 5xx as fact" "0" \
   "$(field '.analytics.server_errors' <<<"$out2")"
 assert_eq "  ... with no error surfaced" "" "$(field '.analytics_error' <<<"$out2")"
+
+# A zone younger than 48 hours has a window but no baseline. A percent change
+# against nothing is not zero, so nothing is what gets reported.
+out3=$(run --fresh overview "$ZONE_NEW")
+assert_eq "a zone with no baseline still reports traffic" "19812" \
+  "$(field '.analytics.requests' <<<"$out3")"
+assert_eq "  ... and suppresses the delta rather than calling it zero" "null" \
+  "$(field '.analytics.requests_delta' <<<"$out3")"
+assert_eq "  ... for every stat that carries one" "null" \
+  "$(field '.analytics.cache_ratio_delta' <<<"$out3")"
+assert_eq "  ... naming no comparison period" "" \
+  "$(field '.analytics.comparison' <<<"$out3")"
+assert_eq "  ... and offering no baseline to read" "null" \
+  "$(field '.analytics.previous' <<<"$out3")"
 
 out=$(run --fresh tunnels "$ACCOUNT")
 assert_eq "tunnels are listed" "2" "$(field '.tunnels | length' <<<"$out")"
@@ -239,7 +278,7 @@ run --fresh zones >/dev/null
 assert_eq "a read is cached" "1" "$(ls "$XDG_CACHE_HOME/cloudflarechy/zones.json" 2>/dev/null | wc -l)"
 printf '{"zones":[{"id":"cached"}]}' > "$XDG_CACHE_HOME/cloudflarechy/zones.json"
 assert_eq "  ... and served from cache" "cached" "$(run zones | field '.zones[0].id')"
-assert_eq "  ... until --fresh" "2" "$(run --fresh zones | field '.zones | length')"
+assert_eq "  ... until --fresh" "3" "$(run --fresh zones | field '.zones | length')"
 
 echo
 echo "saving a token"

@@ -5,7 +5,7 @@ Every field here was checked against a live account before it was written
 down: the zone object carries `development_mode` as seconds (negative once it
 has lapsed), tunnels carry `connections` as a list and a status drawn from
 inactive/degraded/healthy/down, Workers scripts key their name as `id`, and
-the GraphQL analytics endpoint answers `httpRequests1hGroups` with 24 hourly
+the GraphQL analytics endpoint answers `httpRequests1hGroups` with 48 hourly
 buckets. If Cloudflare changes any of that, these tests keep passing and the
 plugin still breaks — which is the honest limit of a fixture.
 
@@ -23,6 +23,9 @@ ZONE = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 # A zone on a plan that serves neither `uniques` nor `responseStatusMap`, so the
 # query's last fallback rung gets walked.
 ZONE2 = "b" * 32
+# A zone younger than the 48-hour window: it has a last 24 hours and nothing
+# before them, which is the case where a delta has no baseline to report.
+ZONE_NEW = "c" * 32
 ACCOUNT = "0f9e8d7c6b5a40312f1e0d9c8b7a6554"
 # An account whose Workers list is readable but whose invocation analytics are
 # not — the plugin should still list the scripts.
@@ -50,27 +53,56 @@ def zone_object(zone_id=ZONE, name="example.com"):
 
 
 def hourly(with_status=False):
+    """Forty-eight hourly buckets: the last 24 hours, and the 24 before them.
+
+    The script asks for 48 hours and splits them on the midpoint to compute a
+    period-over-period delta, so a fixture of 24 could not tell a working split
+    from one that compares the window against itself.
+
+    The two halves are chosen so the deltas are exact rather than approximate:
+    19812 requests against 13208 is precisely +50%, and the same 2400-byte
+    multiplier makes bytes land on +50% too. The earlier half caches at 0.41
+    against 0.82, so the cache ratio moves as well and a delta wired to the
+    wrong field cannot pass by accident.
+    """
     now = datetime.datetime.now(datetime.timezone.utc).replace(
         minute=0, second=0, microsecond=0)
     out = []
-    for i in range(24):
-        t = now - datetime.timedelta(hours=23 - i)
-        requests = 400 + i * 37
+    for i in range(48):
+        t = now - datetime.timedelta(hours=47 - i)
+        recent = i >= 24
+        if recent:
+            requests = 400 + (i - 24) * 37
+            cache_fraction = 0.82
+            threats = (i - 24) % 5
+        else:
+            # 8 hours of 551 and 16 of 550 sum to 13208, two thirds of the
+            # recent window. Nothing rides on the shape, only on the total.
+            requests = 551 if i < 8 else 550
+            cache_fraction = 0.41
+            threats = 0
         group = {
             "dimensions": {"datetime": t.strftime("%Y-%m-%dT%H:00:00Z")},
             "sum": {"requests": requests, "bytes": requests * 2400,
-                    "cachedRequests": int(requests * 0.82),
+                    "cachedRequests": int(requests * cache_fraction),
                     "cachedBytes": int(requests * 2400 * 0.77),
-                    "threats": i % 5},
+                    "threats": threats},
         }
         if with_status:
             # Ten 5xx and five 4xx an hour, the rest fine: enough that the
-            # totals are exact and hand-checkable.
-            group["sum"]["responseStatusMap"] = [
-                {"edgeResponseStatus": 200, "requests": requests - 15},
-                {"edgeResponseStatus": 404, "requests": 5},
-                {"edgeResponseStatus": 503, "requests": 10},
-            ]
+            # totals are exact and hand-checkable. Only the recent window
+            # carries them, so a status total that silently includes the
+            # baseline shows up as a wrong number rather than a wrong shape.
+            if recent:
+                group["sum"]["responseStatusMap"] = [
+                    {"edgeResponseStatus": 200, "requests": requests - 15},
+                    {"edgeResponseStatus": 404, "requests": 5},
+                    {"edgeResponseStatus": 503, "requests": 10},
+                ]
+            else:
+                group["sum"]["responseStatusMap"] = [
+                    {"edgeResponseStatus": 200, "requests": requests},
+                ]
         out.append(group)
     return out
 
@@ -100,11 +132,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(ok({"id": "tok", "status": "active"}))
         if path == "/zones":
             return self.reply(ok([zone_object(),
-                                  zone_object(ZONE2, "second.dev")]))
+                                  zone_object(ZONE2, "second.dev"),
+                                  zone_object(ZONE_NEW, "brandnew.dev")]))
         if path == f"/zones/{ZONE}":
             return self.reply(ok(zone_object()))
         if path == f"/zones/{ZONE2}":
             return self.reply(ok(zone_object(ZONE2, "second.dev")))
+        if path == f"/zones/{ZONE_NEW}":
+            return self.reply(ok(zone_object(ZONE_NEW, "brandnew.dev")))
         if re.fullmatch(r"/zones/\w+/settings/security_level", path):
             if self.scoped_out():
                 return self.reply(denied(), 403)
@@ -210,8 +245,12 @@ class Handler(BaseHTTPRequestHandler):
             if wants_status and variables.get("zone") == ZONE2:
                 return self.reply({"data": None, "errors": [
                     {"message": "field responseStatusMap is not available on this plan"}]})
+            groups = hourly(wants_status)
+            if variables.get("zone") == ZONE_NEW:
+                # Only the recent half exists, so there is no baseline.
+                groups = groups[24:]
             return self.reply({"data": {"viewer": {"zones": [
-                {"httpRequests1hGroups": hourly(wants_status)}]}}, "errors": None})
+                {"httpRequests1hGroups": groups}]}}, "errors": None})
         if path.endswith("/purge_cache"):
             if self.scoped_out():
                 return self.reply(denied(), 403)

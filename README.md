@@ -15,7 +15,8 @@ Tunnel is `down` or `degraded`, or when the zone starts answering 5xx at a rate
 worth looking at. Hovering the icon says which.
 
 Everything shown comes from the Cloudflare API. Nothing is computed locally
-except the cache ratio, which is cached ÷ total over the same 24 hours.
+except the cache ratio, which is cached ÷ total over the same 24 hours, and
+the period-over-period deltas, which are derived from the same one request.
 
 ## Install
 
@@ -132,9 +133,19 @@ and the only way the bar dot stays honest while you are not looking.
 
 ## What it shows
 
-**Last 24 hours** — requests, share served from cache, bytes served, **5xx**,
-threats blocked, then one bar per hour. Each bar is that hour's requests; the
-filled part at its foot is the share that came from cache.
+**Last 24 hours** — requests, share served from cache, bytes served, each with
+how it compares to the 24 hours before it; then one bar per hour. Each bar is
+that hour's requests, and the filled part at its foot is the share that came
+from cache. Under the graph, **5xx** and threats blocked.
+
+The window is fetched 48 hours wide and split on its midpoint, so the
+comparison costs no extra request. Deltas are relative — a cache ratio moving
+from 1% to 2% reads as `↗ 100.0%`, not as a point difference — which is the
+convention Cloudflare's own cards use. They are deliberately uncoloured:
+more requests can be growth or an attack, and the panel does not claim to
+know which. A zone younger than 48 hours has no baseline, and no baseline
+shows nothing rather than `0%`, because "unchanged" and "nothing to compare"
+are different answers.
 
 `5xx` is there because a zone serving nothing but errors reports exactly the
 same request count as a healthy one — without it, a failing zone renders as a

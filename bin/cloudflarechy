@@ -395,11 +395,17 @@ cmd_overview() {
 # 24 hourly buckets from the GraphQL Analytics API. The REST dashboard endpoint
 # it replaced is gone for new zones, and this is the one dataset every plan
 # can read.
+# Two windows, fetched as one 48-hour request and split on the midpoint, so a
+# number can say whether it is normal. Cloudflare's own cards compare against
+# the immediately preceding window of the same length, and the split is done by
+# timestamp rather than by counting buckets: an hour with no traffic is absent
+# from the response, so the newest 24 rows are not reliably the newest 24 hours.
 zone_analytics() {
-  local zone="$1" since till raw err
-  since=$(date -u -d '-23 hours' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
-  till=$(date -u -d '+1 hour' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
-  if [[ -z $since || -z $till ]]; then
+  local zone="$1" since mid till raw err
+  since=$(date -u -d '-47 hours' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  mid=$(date -u -d '-23 hours'   +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  till=$(date -u -d '+1 hour'    +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  if [[ -z $since || -z $mid || -z $till ]]; then
     "$JQ" -n '{error: "could not compute a time window (needs GNU date)"}'
     return
   fi
@@ -427,40 +433,70 @@ zone_analytics() {
       error: $e, requests: 0, cached_requests: 0, bytes: 0, cached_bytes: 0,
       threats: 0, uniques: 0, cache_ratio: 0, series: [], uniques_known: false,
       server_errors: 0, client_errors: 0, statuses: {}, statuses_known: false,
-      error_ratio: 0
+      error_ratio: 0, comparison: "", previous: null,
+      requests_delta: null, bytes_delta: null, cache_ratio_delta: null
     }'
     return
   fi
 
-  "$JQ" '
-    ((.data.viewer.zones // [])[0].httpRequests1hGroups // []) as $g
-    | ([$g[] | .sum.requests // 0]       | add // 0) as $requests
-    | ([$g[] | .sum.cachedRequests // 0] | add // 0) as $cached
-    # Every status the edge returned, summed across the window. A zone serving
-    # nothing but 5xx has exactly the same request count as a healthy one, so
-    # without this the panel cannot tell them apart.
-    | (reduce ($g[] | (.sum.responseStatusMap // [])[]) as $s
-        ({}; .[$s.edgeResponseStatus | tostring] += ($s.requests // 0))) as $statuses
-    | ([$statuses | to_entries[] | select(.key | startswith("5")) | .value] | add // 0) as $server_errors
-    | ([$statuses | to_entries[] | select(.key | startswith("4")) | .value] | add // 0) as $client_errors
-    | ($statuses | length > 0) as $statuses_known
-    | {
-        requests:        $requests,
-        cached_requests: $cached,
-        bytes:           ([$g[] | .sum.bytes // 0]       | add // 0),
-        cached_bytes:    ([$g[] | .sum.cachedBytes // 0] | add // 0),
-        threats:         ([$g[] | .sum.threats // 0]     | add // 0),
-        uniques:         ([$g[] | .uniq.uniques // 0]    | add // 0),
-        uniques_known:   ([$g[] | .uniq.uniques // null] | map(select(. != null)) | length) > 0,
-        cache_ratio:     (if $requests > 0 then ($cached / $requests) else 0 end),
-        # 5xx is the zone failing. 4xx is often the zone working — a block or a
-        # 404 — so the two are never added together.
-        server_errors:   $server_errors,
-        client_errors:   $client_errors,
-        statuses:        $statuses,
-        statuses_known:  $statuses_known,
-        error_ratio:     (if $requests > 0 then ($server_errors / $requests) else 0 end),
-        series: [ $g[] | {
+  "$JQ" --arg mid "$mid" '
+    # One window, summed. Used twice: once for the last 24 hours and once for
+    # the 24 before it, so the two are guaranteed to be measured the same way.
+    def totals:
+      ([.[] | .sum.requests // 0]         | add // 0) as $requests
+      | ([.[] | .sum.cachedRequests // 0] | add // 0) as $cached
+      # Every status the edge returned, summed across the window. A zone serving
+      # nothing but 5xx has exactly the same request count as a healthy one, so
+      # without this the panel cannot tell them apart.
+      | (reduce (.[] | (.sum.responseStatusMap // [])[]) as $s
+          ({}; .[$s.edgeResponseStatus | tostring] += ($s.requests // 0))) as $statuses
+      | {
+          requests:        $requests,
+          cached_requests: $cached,
+          bytes:           ([.[] | .sum.bytes // 0]       | add // 0),
+          cached_bytes:    ([.[] | .sum.cachedBytes // 0] | add // 0),
+          threats:         ([.[] | .sum.threats // 0]     | add // 0),
+          uniques:         ([.[] | .uniq.uniques // 0]    | add // 0),
+          uniques_known:   ([.[] | .uniq.uniques // null] | map(select(. != null)) | length) > 0,
+          cache_ratio:     (if $requests > 0 then ($cached / $requests) else 0 end),
+          # 5xx is the zone failing. 4xx is often the zone working — a block or
+          # a 404 — so the two are never added together.
+          server_errors:   ([$statuses | to_entries[] | select(.key | startswith("5")) | .value] | add // 0),
+          client_errors:   ([$statuses | to_entries[] | select(.key | startswith("4")) | .value] | add // 0),
+          statuses:        $statuses,
+          statuses_known:  ($statuses | length > 0)
+        };
+
+    # Relative change, which is what Cloudflare reports — including for the
+    # cache ratio, where the card reads as a percentage of the old percentage
+    # and not as a difference in points. A zero baseline has no relative change
+    # to report, so it yields null and the panel shows nothing rather than
+    # inventing an arrow.
+    def rel($now; $before): if $before == 0 then null else (($now - $before) / $before) end;
+
+    ((.data.viewer.zones // [])[0].httpRequests1hGroups // []) as $all
+    | ($all | map(select((.dimensions.datetime // "") >= $mid))) as $window
+    | ($all | map(select((.dimensions.datetime // "") <  $mid))) as $before
+    | ($window | totals) as $now
+    | ($before | totals) as $prev
+    | ($before | length > 0) as $comparable
+    | $now + {
+        error_ratio: (if $now.requests > 0
+                      then ($now.server_errors / $now.requests) else 0 end),
+        # Named so the panel can label the arrows without hardcoding a period
+        # that the range selector will later change.
+        comparison: (if $comparable then "previous 24 hours" else "" end),
+        previous: (if $comparable then {
+          requests:    $prev.requests,
+          bytes:       $prev.bytes,
+          cache_ratio: $prev.cache_ratio
+        } else null end),
+        requests_delta:    (if $comparable then rel($now.requests; $prev.requests) else null end),
+        bytes_delta:       (if $comparable then rel($now.bytes; $prev.bytes) else null end),
+        cache_ratio_delta: (if $comparable then rel($now.cache_ratio; $prev.cache_ratio) else null end),
+        # The graph stays 24 hours wide. The earlier window is a baseline, not
+        # something to draw.
+        series: [ $window[] | {
           t:        (.dimensions.datetime // ""),
           requests: (.sum.requests // 0),
           cached:   (.sum.cachedRequests // 0),
@@ -481,7 +517,7 @@ query (\$zone: String!, \$since: Time!, \$until: Time!) {
   viewer {
     zones(filter: {zoneTag: \$zone}) {
       httpRequests1hGroups(
-        limit: 24
+        limit: 48
         orderBy: [datetime_ASC]
         filter: {datetime_geq: \$since, datetime_lt: \$until}
       ) {

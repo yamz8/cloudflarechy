@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0
+
+- Tunnels and Workers now sit under an `ACCOUNT` header. They are
+  account-scoped — Cloudflare files them under Compute and Networking, not
+  under a domain — so listing them beneath the zone picker implied they
+  changed with the zone, and they never did.
+- Requests, cached and served carry a period-over-period delta. The window is
+  fetched 48 hours wide and split on its midpoint, so the comparison costs no
+  extra request, and it is split by timestamp rather than by counting rows
+  because an hour with no traffic is simply absent from the response.
+- Deltas are relative, not point differences, matching what the dashboard
+  reports: its own cache-hit-rate card reads 0.97% with a 56.3% fall, which is
+  only possible as a relative change.
+- A zone with no earlier window shows no delta at all rather than `0%`.
+  Nothing to compare is not the same answer as unchanged.
+- The stat row drops from five slots to three. Five left 76px each, which
+  cannot hold a number and its delta; `5xx` and threats moved to a line under
+  the graph and take colour only when non-zero.
+
 ## 0.7.0
 
 - Click a Worker to give it the whole panel: requests, success rate, p50 and
