@@ -12,7 +12,7 @@
 #   cloudflarechy save-token       reads the token on stdin, checks it, saves it
 #   cloudflarechy forget-token
 #   cloudflarechy zones
-#   cloudflarechy overview <zone-id>
+#   cloudflarechy overview <zone-id> [24h|7d|30d]
 #   cloudflarechy tunnels <account-id>
 #   cloudflarechy workers <account-id>
 #   cloudflarechy worker  <account-id> <script>
@@ -340,12 +340,19 @@ cmd_zones() {
 # One zone, everything the panel shows above the fold: what the zone is, the
 # two switches, and 24 hours of traffic.
 cmd_overview() {
-  local zone="${1:-}"
+  local zone="${1:-}" range="${2:-24h}"
   [[ -n $zone ]] || die "overview needs a zone id"
+  case " $(analytics_ranges) " in
+    *" $range "*) ;;
+    *) die "unknown range: $range" "Use one of $(analytics_ranges)." ;;
+  esac
   require_token
 
+  # The range is part of the key. Without it, switching to 7 days would be
+  # answered from the 24-hour entry for as long as it stayed warm, and the
+  # panel would show a week's label over a day's numbers.
   local cached
-  if cached=$(cache_read "overview.$zone.json" 60); then printf '%s\n' "$cached"; return; fi
+  if cached=$(cache_read "overview.$zone.$range.json" 60); then printf '%s\n' "$cached"; return; fi
 
   local zraw zerr
   zraw=$(api GET "/zones/$zone")
@@ -364,7 +371,7 @@ cmd_overview() {
   fi
 
   local analytics analytics_error
-  analytics=$(zone_analytics "$zone")
+  analytics=$(zone_analytics "$zone" "$range")
   analytics_error=$("$JQ" -r '.error // ""' <<<"$analytics")
 
   "$JQ" -n \
@@ -372,7 +379,9 @@ cmd_overview() {
     --argjson analytics "$analytics" \
     --arg level "$level" \
     --arg level_error "$serr" \
-    --arg analytics_error "$analytics_error" '
+    --arg analytics_error "$analytics_error" \
+    --arg range "$range" \
+    --argjson ranges "$("$JQ" -n --args '$ARGS.positional' $(analytics_ranges))" '
     ($zone.result // {}) as $z | {
       zone: {
         id:               ($z.id // ""),
@@ -388,23 +397,50 @@ cmd_overview() {
       security_level_error: $level_error,
       under_attack: ($level == "under_attack"),
       analytics: ($analytics | del(.error)),
-      analytics_error: $analytics_error
-    }' | cache_and_print "overview.$zone.json"
+      analytics_error: $analytics_error,
+      range: $range,
+      ranges: $ranges
+    }' | cache_and_print "overview.$zone.$range.json"
 }
 
 # 24 hourly buckets from the GraphQL Analytics API. The REST dashboard endpoint
 # it replaced is gone for new zones, and this is the one dataset every plan
 # can read.
-# Two windows, fetched as one 48-hour request and split on the midpoint, so a
-# number can say whether it is normal. Cloudflare's own cards compare against
-# the immediately preceding window of the same length, and the split is done by
-# timestamp rather than by counting buckets: an hour with no traffic is absent
-# from the response, so the newest 24 rows are not reliably the newest 24 hours.
+# The three ranges the zone page offers. Each is fetched at twice its width and
+# split on the midpoint, so a number can say whether it is normal and the
+# comparison costs no second request. Cloudflare's own cards compare against
+# the immediately preceding window of the same length, and rebase when the
+# range changes — 8.38k ↗12.3% over 24 hours becomes 50.45k ↗126.8% over 7
+# days on the same account.
+#
+# Hours come from httpRequests1hGroups and days from httpRequests1dGroups, and
+# the two datasets disagree about more than their resolution: one is keyed on a
+# `datetime` of GraphQL type Time, the other on a `date` of type Date. Getting
+# either wrong fails the whole query, so the range carries all four facts.
+analytics_range_spec() {
+  case "${1:-24h}" in
+    7d)  echo "httpRequests1dGroups date Date 14 -13days -6days +1day previous|7|days" ;;
+    30d) echo "httpRequests1dGroups date Date 60 -59days -29days +1day previous|30|days" ;;
+    *)   echo "httpRequests1hGroups datetime Time 48 -47hours -23hours +1hour previous|24|hours" ;;
+  esac
+}
+
+analytics_ranges() { echo "24h 7d 30d"; }
+
 zone_analytics() {
-  local zone="$1" since mid till raw err
-  since=$(date -u -d '-47 hours' +%Y-%m-%dT%H:00:00Z 2>/dev/null)
-  mid=$(date -u -d '-23 hours'   +%Y-%m-%dT%H:00:00Z 2>/dev/null)
-  till=$(date -u -d '+1 hour'    +%Y-%m-%dT%H:00:00Z 2>/dev/null)
+  local zone="$1" range="${2:-24h}" raw err
+  local dataset dimension gqltype limit from midpoint to label fmt since mid till
+
+  # shellcheck disable=SC2046
+  read -r dataset dimension gqltype limit from midpoint to label <<<"$(analytics_range_spec "$range")"
+  label=${label//|/ }
+
+  # Buckets are floored to their own resolution, or the midpoint could land
+  # inside a bucket and the split would put the same traffic on both sides.
+  if [[ $dimension == date ]]; then fmt=+%Y-%m-%d; else fmt=+%Y-%m-%dT%H:00:00Z; fi
+  since=$(date -u -d "$from"     "$fmt" 2>/dev/null)
+  mid=$(date -u -d "$midpoint"   "$fmt" 2>/dev/null)
+  till=$(date -u -d "$to"        "$fmt" 2>/dev/null)
   if [[ -z $since || -z $mid || -z $till ]]; then
     "$JQ" -n '{error: "could not compute a time window (needs GNU date)"}'
     return
@@ -423,7 +459,7 @@ zone_analytics() {
   err="no analytics attempt ran"
   for attempt in "yes yes" "no yes" "yes no" "no no"; do
     # shellcheck disable=SC2086
-    raw=$(gql "$(analytics_query $attempt)" "$vars")
+    raw=$(gql "$(analytics_query $attempt "$dataset" "$dimension" "$gqltype" "$limit")" "$vars")
     err=$(gql_error "$raw")
     [[ -z $err ]] && break
   done
@@ -439,7 +475,8 @@ zone_analytics() {
     return
   fi
 
-  "$JQ" --arg mid "$mid" '
+  "$JQ" --arg mid "$mid" --arg dataset "$dataset" --arg dim "$dimension" \
+        --arg label "$label" '
     # One window, summed. Used twice: once for the last 24 hours and once for
     # the 24 before it, so the two are guaranteed to be measured the same way.
     def totals:
@@ -474,9 +511,14 @@ zone_analytics() {
     # inventing an arrow.
     def rel($now; $before): if $before == 0 then null else (($now - $before) / $before) end;
 
-    ((.data.viewer.zones // [])[0].httpRequests1hGroups // []) as $all
-    | ($all | map(select((.dimensions.datetime // "") >= $mid))) as $window
-    | ($all | map(select((.dimensions.datetime // "") <  $mid))) as $before
+    # Hourly and daily buckets arrive under different keys and carry their
+    # timestamp under different names, so both are read by the name the range
+    # asked for rather than guessed at.
+    ((.data.viewer.zones // [])[0][$dataset] // []) as $all
+    | (def stamp: (.dimensions[$dim] // "");
+       [$all[] | select(stamp >= $mid)]) as $window
+    | (def stamp: (.dimensions[$dim] // "");
+       [$all[] | select(stamp <  $mid)]) as $before
     | ($window | totals) as $now
     | ($before | totals) as $prev
     | ($before | length > 0) as $comparable
@@ -485,7 +527,7 @@ zone_analytics() {
                       then ($now.server_errors / $now.requests) else 0 end),
         # Named so the panel can label the arrows without hardcoding a period
         # that the range selector will later change.
-        comparison: (if $comparable then "previous 24 hours" else "" end),
+        comparison: (if $comparable then $label else "" end),
         previous: (if $comparable then {
           requests:    $prev.requests,
           bytes:       $prev.bytes,
@@ -494,10 +536,10 @@ zone_analytics() {
         requests_delta:    (if $comparable then rel($now.requests; $prev.requests) else null end),
         bytes_delta:       (if $comparable then rel($now.bytes; $prev.bytes) else null end),
         cache_ratio_delta: (if $comparable then rel($now.cache_ratio; $prev.cache_ratio) else null end),
-        # The graph stays 24 hours wide. The earlier window is a baseline, not
-        # something to draw.
+        # The graph draws the window only. The earlier one is a baseline, not
+        # something to show.
         series: [ $window[] | {
-          t:        (.dimensions.datetime // ""),
+          t:        (.dimensions[$dim] // .dimensions.datetime // ""),
           requests: (.sum.requests // 0),
           cached:   (.sum.cachedRequests // 0),
           threats:  (.sum.threats // 0),
@@ -507,21 +549,25 @@ zone_analytics() {
 }
 
 # Two optional blocks, because plan availability differs per field and GraphQL
-# fails the whole query over one it will not serve.
+# fails the whole query over one it will not serve. The dataset, its time
+# dimension, that dimension's scalar type and the bucket count all come from
+# the range — see analytics_range_spec.
 analytics_query() {
   local uniq="" status=""
   [[ ${1:-} == yes ]] && uniq="uniq { uniques }"
   [[ ${2:-} == yes ]] && status="responseStatusMap { edgeResponseStatus requests }"
+  local dataset="${3:-httpRequests1hGroups}" dim="${4:-datetime}"
+  local gqltype="${5:-Time}" limit="${6:-48}"
   cat <<QUERY
-query (\$zone: String!, \$since: Time!, \$until: Time!) {
+query (\$zone: String!, \$since: $gqltype!, \$until: $gqltype!) {
   viewer {
     zones(filter: {zoneTag: \$zone}) {
-      httpRequests1hGroups(
-        limit: 48
-        orderBy: [datetime_ASC]
-        filter: {datetime_geq: \$since, datetime_lt: \$until}
+      $dataset(
+        limit: $limit
+        orderBy: [${dim}_ASC]
+        filter: {${dim}_geq: \$since, ${dim}_lt: \$until}
       ) {
-        dimensions { datetime }
+        dimensions { $dim }
         sum { requests bytes cachedRequests cachedBytes threats $status }
         $uniq
       }

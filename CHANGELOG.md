@@ -6,6 +6,17 @@
   account-scoped — Cloudflare files them under Compute and Networking, not
   under a domain — so listing them beneath the zone picker implied they
   changed with the zone, and they never did.
+- `24H` / `7D` / `30D` in the traffic heading, and `t` to cycle them. Hours
+  come from `httpRequests1hGroups`, days from `httpRequests1dGroups` — a
+  different dataset keyed on a `date` of GraphQL type Date rather than a
+  `datetime` of type Time, so the range carries the dataset, the dimension,
+  its scalar type and the bucket count together.
+- The baseline rebases with the range: the 7-day view compares against the 7
+  days before it, not against yesterday. Each range caches under its own key.
+- The range resets to 24 hours when the panel closes. The bar dot reads its
+  error rate from whichever window is loaded and the background poll keeps
+  loading it, so leaving the panel on 30 days would quietly redefine what
+  lights the icon.
 - Requests, cached and served carry a period-over-period delta. The window is
   fetched 48 hours wide and split on its midpoint, so the comparison costs no
   extra request, and it is split by timestamp rather than by counting rows

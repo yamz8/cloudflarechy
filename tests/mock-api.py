@@ -107,6 +107,46 @@ def hourly(with_status=False):
     return out
 
 
+def daily(buckets, with_status=False):
+    """`buckets` daily rows, the newest half being the window under test.
+
+    Same split as the hourly fixture and the same reason for it, at the other
+    resolution: 7- and 30-day ranges come from httpRequests1dGroups, which is a
+    different dataset keyed on `date` rather than `datetime`, so a query built
+    for one and pointed at the other has to fail visibly.
+
+    The recent half runs 1000, 2000, 3000 ... and the earlier half exactly half
+    of that, so requests and bytes both land on +100%. Caching is 0.6 against
+    0.4, which makes the ratio delta +50% — a different number from the other
+    two, so a delta reading the wrong field cannot pass.
+    """
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    window = buckets // 2
+    out = []
+    for i in range(buckets):
+        d = today - datetime.timedelta(days=buckets - 1 - i)
+        recent = i >= window
+        step = (i - window + 1) if recent else (i + 1)
+        requests = (1000 if recent else 500) * step
+        cache_fraction = 0.6 if recent else 0.4
+        group = {
+            "dimensions": {"date": d.strftime("%Y-%m-%d")},
+            "sum": {"requests": requests, "bytes": requests * 2400,
+                    "cachedRequests": int(requests * cache_fraction),
+                    "cachedBytes": int(requests * 2400 * 0.77),
+                    "threats": 2 if recent else 0},
+        }
+        if with_status:
+            group["sum"]["responseStatusMap"] = (
+                [{"edgeResponseStatus": 200, "requests": requests - 30},
+                 {"edgeResponseStatus": 404, "requests": 10},
+                 {"edgeResponseStatus": 503, "requests": 20}]
+                if recent else
+                [{"edgeResponseStatus": 200, "requests": requests}])
+        out.append(group)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -245,12 +285,18 @@ class Handler(BaseHTTPRequestHandler):
             if wants_status and variables.get("zone") == ZONE2:
                 return self.reply({"data": None, "errors": [
                     {"message": "field responseStatusMap is not available on this plan"}]})
-            groups = hourly(wants_status)
+            # Which dataset answers is the script's decision, not ours: it
+            # picks one per range and the mock has to honour whichever it
+            # named, including the bucket count it asked for.
+            daily_query = "httpRequests1dGroups" in query
+            key = "httpRequests1dGroups" if daily_query else "httpRequests1hGroups"
+            limit = int((re.search(r"limit:\s*(\d+)", query) or [0, 48])[1])
+            groups = daily(limit, wants_status) if daily_query else hourly(wants_status)
             if variables.get("zone") == ZONE_NEW:
                 # Only the recent half exists, so there is no baseline.
-                groups = groups[24:]
+                groups = groups[len(groups) // 2:]
             return self.reply({"data": {"viewer": {"zones": [
-                {"httpRequests1hGroups": groups}]}}, "errors": None})
+                {key: groups}]}}, "errors": None})
         if path.endswith("/purge_cache"):
             if self.scoped_out():
                 return self.reply(denied(), 403)

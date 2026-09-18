@@ -1,9 +1,9 @@
 # Cloudflarechy
 
-One Cloudflare zone in the Omarchy bar: what traffic did in the last 24 hours,
-what the cache did with it, whether your tunnels are up — and whether
-Development Mode or Under Attack Mode is still on from the last time you
-needed it.
+One Cloudflare zone in the Omarchy bar: what traffic did over the last day,
+week or month, what the cache did with it, whether your tunnels are up — and
+whether Development Mode or Under Attack Mode is still on from the last time
+you needed it.
 
 ![The panel](preview.png)
 
@@ -133,13 +133,22 @@ and the only way the bar dot stays honest while you are not looking.
 
 ## What it shows
 
-**Last 24 hours** — requests, share served from cache, bytes served, each with
-how it compares to the 24 hours before it; then one bar per hour. Each bar is
-that hour's requests, and the filled part at its foot is the share that came
-from cache. Under the graph, **5xx** and threats blocked.
+**Traffic** — requests, share served from cache, bytes served, each with how it
+compares to the window before it; then one bar per bucket. Each bar is that
+bucket's requests, and the filled part at its foot is the share that came from
+cache. Under the graph, **5xx** and threats blocked.
 
-The window is fetched 48 hours wide and split on its midpoint, so the
-comparison costs no extra request. Deltas are relative — a cache ratio moving
+`24H` / `7D` / `30D` in the section heading changes the window, and `t` cycles
+it. Each range is fetched at twice its width and split on the midpoint, so the
+comparison costs no extra request, and the baseline rebases with the range —
+the 7-day view compares against the 7 days before it, not against yesterday.
+Hours come from `httpRequests1hGroups` and days from `httpRequests1dGroups`.
+
+The range resets to 24 hours when the panel closes. The bar dot takes its error
+rate from whichever window is loaded, and the background poll keeps loading
+whatever was left selected — so a panel left on 30 days would quietly redefine
+what lights the icon, averaging a bad afternoon into a month until it stopped
+looking like anything. Deltas are relative — a cache ratio moving
 from 1% to 2% reads as `↗ 100.0%`, not as a point difference — which is the
 convention Cloudflare's own cards use. They are deliberately uncoloured:
 more requests can be growth or an attack, and the panel does not claim to
@@ -214,6 +223,7 @@ The Dashboard button is one click from all of them.
 | click the icon | open/close the panel |
 | right-click the icon | refresh now |
 | `r` | refresh now |
+| `t` | next traffic range — 24h, 7d, 30d |
 | `c` | credential screen — sign in, paste a token, or forget one |
 | `Esc` | leave the credential screen, or a Worker's detail view |
 | `d` | toggle Development Mode |

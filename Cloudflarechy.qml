@@ -49,6 +49,11 @@ Panel {
   // --- what came back ------------------------------------------------------
   property var zones: []
   property string zoneId: ""
+  // Which traffic window the zone section shows. Held here rather than in
+  // settings: it is a question you ask once while looking, not a preference.
+  property string range: "24h"
+  readonly property var ranges: root.overview && root.overview.ranges
+                                ? root.overview.ranges : ["24h", "7d", "30d"]
   property var overview: null
   property var tunnels: []
   property var workers: []
@@ -301,10 +306,31 @@ Panel {
     root.loadZone(fresh)
   }
 
+  function setRange(next) {
+    if (next === root.range || root.ranges.indexOf(next) < 0) return
+    root.range = next
+    // The old window is dropped rather than left on screen: its label would
+    // now read as the new range's, which is the one mistake this selector
+    // could make.
+    root.overview = null
+    root.loadZone(false)
+  }
+
+  function cycleRange(step) {
+    var at = root.ranges.indexOf(root.range)
+    if (at < 0) at = 0
+    var n = root.ranges.length
+    root.setRange(root.ranges[((at + step) % n + n) % n])
+  }
+
+  function rangeLabel(id) {
+    return String(id || "").toUpperCase()
+  }
+
   function loadZone(fresh) {
     if (root.zoneId === "") return
 
-    bridge.call(["overview", root.zoneId], function(payload) {
+    bridge.call(["overview", root.zoneId, root.range], function(payload) {
       if (!payload) return
       if (payload.error) {
         root.error = payload.error
@@ -640,6 +666,12 @@ Panel {
       root.showSetup = false
       root.setupStatus = ""
       root.closeWorkerDetail()
+      // The bar dot reads its error rate from whichever window is loaded, and
+      // the background poll keeps loading whatever was left selected. Leaving
+      // the panel on 30 days would quietly redefine what lights the icon: a
+      // bad afternoon averaged over a month stops looking like anything. So
+      // the range is a question asked while looking, and closing ends it.
+      root.range = "24h"
     }
   }
 
@@ -852,6 +884,9 @@ Panel {
         }
         if (root.setupVisible || root.workerDetailVisible) return
         if (key === "r") root.refresh(true)
+        // Widening the window reads nothing it could not already read, so it
+        // stays available on a read-only credential.
+        else if (key === "t") root.cycleRange(1)
         else if (root.readOnly) return
         else if (key === "d") root.toggleDevMode()
         else if (key === "u") root.toggleAttack()
@@ -1008,22 +1043,65 @@ Panel {
             }
           }
 
-          // ---- 24 hours ---------------------------------------------------
-          PanelSectionHeader {
+          // ---- traffic ----------------------------------------------------
+          // The range moved out of the heading and into a control, so the
+          // heading says what the section is and the control says how wide a
+          // window it is showing — which is how the zone page reads.
+          Item {
             width: parent.width
             visible: root.zone !== null
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            textFormat: Text.PlainText
-            // The arrows are meaningless without their baseline, so the
-            // header names it rather than leaving it to a tooltip the bar
-            // has no room for.
-            text: {
-              if (root.analyticsError !== "") return "LAST 24 HOURS  ·  UNAVAILABLE"
-              if (!root.analytics) return "LAST 24 HOURS  ·  LOADING"
-              return root.analytics.comparison
-                     ? "LAST 24 HOURS  ·  VS PREVIOUS"
-                     : "LAST 24 HOURS"
+            height: Math.max(trafficHeading.implicitHeight, rangePicker.implicitHeight)
+
+            PanelSectionHeader {
+              id: trafficHeading
+              anchors.left: parent.left
+              anchors.right: rangePicker.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              textFormat: Text.PlainText
+              // The arrows are meaningless without their baseline, so the
+              // heading names it rather than leaving it to a tooltip the bar
+              // has no room for.
+              text: {
+                if (root.analyticsError !== "") return "TRAFFIC  ·  UNAVAILABLE"
+                if (!root.analytics) return "TRAFFIC  ·  LOADING"
+                return root.analytics.comparison ? "TRAFFIC  ·  VS PREVIOUS" : "TRAFFIC"
+              }
+            }
+
+            Row {
+              id: rangePicker
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.sm
+
+              Repeater {
+                model: root.ranges
+
+                delegate: Text {
+                  required property var modelData
+                  readonly property bool current: modelData === root.range
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  // The unselected ranges stay legible rather than becoming
+                  // decoration: they are the control, not a caption.
+                  opacity: current ? 1.0 : (rangeHover.containsMouse ? 0.8 : 0.45)
+                  textFormat: Text.PlainText
+                  text: root.rangeLabel(modelData)
+
+                  MouseArea {
+                    id: rangeHover
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xxs
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setRange(parent.modelData)
+                  }
+                }
+              }
             }
           }
 

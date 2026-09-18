@@ -185,6 +185,57 @@ assert_eq "  ... naming no comparison period" "" \
 assert_eq "  ... and offering no baseline to read" "null" \
   "$(field '.analytics.previous' <<<"$out3")"
 
+# 7 and 30 days come from a different dataset than 24 hours, keyed on a `date`
+# of GraphQL type Date rather than a `datetime` of type Time. A query built for
+# one and aimed at the other fails outright, so each range is walked.
+out7=$(run --fresh overview "$ZONE" 7d)
+assert_eq "seven days is a week of buckets" "7" \
+  "$(field '.analytics.series | length' <<<"$out7")"
+assert_eq "  ... dated, not stamped by the hour" "true" \
+  "$(field '.analytics.series[0].t | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")' <<<"$out7")"
+assert_eq "  ... totalling the daily rows" "28000" \
+  "$(field '.analytics.requests' <<<"$out7")"
+assert_eq "  ... against the week before it" "1" \
+  "$(field '.analytics.requests_delta' <<<"$out7")"
+assert_eq "  ... and saying so" "previous 7 days" \
+  "$(field '.analytics.comparison' <<<"$out7")"
+# 0.6 against 0.4 is +50%, a different number from the +100% on requests and
+# bytes, so a delta reading the wrong field cannot pass here either.
+assert_eq "  ... with the cache ratio moved separately" "0.5" \
+  "$(field '(.analytics.cache_ratio_delta * 100 | round) / 100' <<<"$out7")"
+assert_eq "  ... and no error" "" "$(field '.analytics_error' <<<"$out7")"
+
+out30=$(run --fresh overview "$ZONE" 30d)
+assert_eq "thirty days is a month of buckets" "30" \
+  "$(field '.analytics.series | length' <<<"$out30")"
+assert_eq "  ... totalling the daily rows" "465000" \
+  "$(field '.analytics.requests' <<<"$out30")"
+assert_eq "  ... against the month before it" "1" \
+  "$(field '.analytics.requests_delta' <<<"$out30")"
+assert_eq "  ... and saying so" "previous 30 days" \
+  "$(field '.analytics.comparison' <<<"$out30")"
+
+assert_eq "the range is reported back" "24h" "$(field '.range' <<<"$out")"
+assert_eq "  ... alongside the ones on offer" "24h 7d 30d" \
+  "$(field '.ranges | join(" ")' <<<"$out")"
+out_bad=$(run --fresh overview "$ZONE" 90d)
+assert_contains "an unknown range is refused" "unknown range" \
+  "$(field '.error' <<<"$out_bad")"
+assert_contains "  ... naming the ones that work" "24h 7d 30d" \
+  "$(field '.hint' <<<"$out_bad")"
+
+# Each range caches under its own key. Sharing one would answer a week from a
+# day's entry for as long as it stayed warm.
+run overview "$ZONE" 7d >/dev/null
+assert_eq "each range caches separately" "1" \
+  "$(ls "$XDG_CACHE_HOME/cloudflarechy/overview.$ZONE.7d.json" 2>/dev/null | wc -l)"
+printf '{"range":"7d","analytics":{"requests":777}}' \
+  > "$XDG_CACHE_HOME/cloudflarechy/overview.$ZONE.7d.json"
+assert_eq "  ... and is served from its own" "777" \
+  "$(run overview "$ZONE" 7d | field '.analytics.requests')"
+assert_eq "  ... leaving the other range alone" "19812" \
+  "$(run --fresh overview "$ZONE" 24h | field '.analytics.requests')"
+
 out=$(run --fresh tunnels "$ACCOUNT")
 assert_eq "tunnels are listed" "2" "$(field '.tunnels | length' <<<"$out")"
 assert_eq "  ... with connection counts" "2" "$(field '.tunnels[0].connections' <<<"$out")"

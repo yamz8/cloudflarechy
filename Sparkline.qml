@@ -1,10 +1,11 @@
 import QtQuick
 import qs.Commons
 
-// 24 hourly buckets, one bar each, in the order the Analytics API ranked
-// them — oldest on the left. Each bar is the hour's total requests; the filled
-// portion at its foot is the share Cloudflare served from cache, which is the
-// one comparison the numbers above cannot make hour by hour.
+// One bar per bucket, in the order the Analytics API ranked them — oldest on
+// the left. How many there are depends on the range the panel asked for: 24
+// hourly buckets, or 7 or 30 daily ones. Each bar is that bucket's total
+// requests; the filled portion at its foot is the share Cloudflare served from
+// cache, which is the one comparison the numbers above cannot make per bucket.
 //
 // Bar heights are square-rooted, scaled against the busiest hour in the window
 // rather than an absolute ceiling.
@@ -60,8 +61,8 @@ Item {
 
       delegate: Item {
         required property var modelData
-        // An hour with no traffic still occupies its slot, so the window stays
-        // 24 hours wide and a gap reads as a gap.
+        // A bucket with no traffic still occupies its slot, so the window
+        // keeps its full width and a gap reads as a gap.
         width: (root.width - root.barSpacing * Math.max(0, root.series.length - 1))
                / Math.max(1, root.series.length)
         height: root.height
@@ -80,7 +81,12 @@ Item {
           height: parent.ratio > 0
                   ? Math.max(Style.space(2), parent.ratio * parent.height)
                   : Style.space(1)
-          radius: Math.min(width, height) / 3
+          // Capped, not just proportional. Derived from the smaller dimension
+          // alone, a 7-day window's bars are wide enough that the corners eat
+          // the bar and it reads as a row of lozenges instead of a chart. The
+          // cap is the radius a 24-bucket bar already had, so the hourly view
+          // is unchanged and the others match it.
+          radius: Math.min(width, height, Style.space(15)) / 3
           color: parent.ratio > 0 ? Qt.rgba(root.foreground.r, root.foreground.g,
                                             root.foreground.b, 0.22)
                                   : Qt.rgba(root.foreground.r, root.foreground.g,
