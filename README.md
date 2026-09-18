@@ -87,7 +87,8 @@ token can be minted with exactly those:
 | Scope | What it buys | Without it |
 |---|---|---|
 | Zone → Zone → Read | the zone list, plan, status | nothing works |
-| Zone → Analytics → Read | the 24h numbers and the graph | traffic section says so |
+| Zone → Analytics → Read | the traffic numbers and the graph | traffic section says so |
+| Zone → Workers Routes → Read | which Workers run on this domain | Routes section hidden |
 | Zone → Zone Settings → Read | Development Mode, security level | the two switches grey out |
 | Zone → Zone Settings → Edit | flipping those two switches | they stay read-only |
 | Zone → Cache Purge → Purge | Purge cache | the button errors |
@@ -133,6 +134,12 @@ and the only way the bar dot stays honest while you are not looking.
 
 ## What it shows
 
+**Routes** — which Workers answer for this domain, and on what pattern. This is
+zone-scoped: it changes with the zone picker, unlike the Workers list below the
+account break, which is every script in the account. The same Worker can appear
+in both, for different reasons. Click one to open its detail view; a route with
+no Worker behind it says so and stays inert.
+
 **Traffic** — requests, share served from cache, bytes served, each with how it
 compares to the window before it; then one bar per bucket. Each bar is that
 bucket's requests, and the filled part at its foot is the share that came from
@@ -160,6 +167,12 @@ are different answers.
 same request count as a healthy one — without it, a failing zone renders as a
 quiet one. 4xx is counted separately and not shown: a 403 or a 404 is often the
 zone doing precisely what it was told, while a 503 never is.
+
+Point at a bar and the line under the graph names that bucket — its hour or
+day, its requests, its cache share. It replaces the 5xx/threats line rather
+than appearing beside it, so nothing moves. On a Worker's graph the same hover
+reports requests and errors, and there it is inserted under the bars, which
+cannot move them out from under the pointer.
 
 Bar heights are square-rooted, scaled against the busiest hour in the window.
 Two real shapes settled that. A zone idling at 16 requests an hour took a

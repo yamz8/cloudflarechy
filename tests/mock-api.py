@@ -180,6 +180,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(ok(zone_object(ZONE2, "second.dev")))
         if path == f"/zones/{ZONE_NEW}":
             return self.reply(ok(zone_object(ZONE_NEW, "brandnew.dev")))
+        if re.fullmatch(r"/zones/\w+/workers/routes", path):
+            # Its own scope, so a read-only credential loses the section and
+            # keeps everything else.
+            if self.scoped_out():
+                return self.reply(denied(), 403)
+            if path.split("/")[2] == ZONE2:
+                return self.reply(ok([]))
+            return self.reply(ok([
+                {"id": "r2", "pattern": "example.com/api/*", "script": "api-router"},
+                # Sorted by pattern, so this one leads despite coming second.
+                {"id": "r1", "pattern": "assets.example.com/*", "script": "image-resize"},
+                # A route with no Worker behind it is a real state and must not
+                # pretend to be clickable.
+                {"id": "r3", "pattern": "example.com/legacy/*", "script": ""},
+            ]))
         if re.fullmatch(r"/zones/\w+/settings/security_level", path):
             if self.scoped_out():
                 return self.reply(denied(), 403)

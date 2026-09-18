@@ -41,6 +41,17 @@ Item {
   property color accent: "#f6821f"
   property real barSpacing: Style.spacing.xxs
 
+  // Which bucket the pointer is over, or -1. The chart deliberately does not
+  // draw the figure itself: at this width a floating label would cover the
+  // bars it is describing, so the panel reads this and prints it on the line
+  // below, where there is already room.
+  property int hoveredIndex: -1
+  readonly property var hoveredBucket: root.hoveredIndex >= 0
+                                       && root.hoveredIndex < root.series.length
+                                       ? root.series[root.hoveredIndex] : null
+
+  onSeriesChanged: root.hoveredIndex = -1
+
   readonly property real peak: {
     var max = 0
     for (var i = 0; i < root.series.length; i++) {
@@ -60,7 +71,9 @@ Item {
       model: root.series
 
       delegate: Item {
+        id: bucket
         required property var modelData
+        required property int index
         // A bucket with no traffic still occupies its slot, so the window
         // keeps its full width and a gap reads as a gap.
         width: (root.width - root.barSpacing * Math.max(0, root.series.length - 1))
@@ -105,6 +118,16 @@ Item {
             color: root.accent
             opacity: 0.85
           }
+        }
+
+        // Over the whole slot, not just the drawn bar: a quiet bucket is one
+        // pixel tall and would be unpointable otherwise, and a quiet bucket is
+        // often the one worth asking about.
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          onEntered: root.hoveredIndex = bucket.index
+          onExited: if (root.hoveredIndex === bucket.index) root.hoveredIndex = -1
         }
       }
     }

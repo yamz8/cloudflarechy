@@ -2,6 +2,17 @@
 
 ## 0.8.0
 
+- Hovering a bar names its bucket under the graph: the hour or day, the
+  requests, the cache share. On the zone chart it takes the 5xx/threats line's
+  place rather than adding one, so nothing moves; a Worker's chart has no line
+  to share, so it inserts one below the bars where it cannot push them out
+  from under the pointer.
+- A `ROUTES` section: which Workers answer for this domain, and on what
+  pattern. Cloudflare puts this on the zone page, and it is the only Workers
+  view that genuinely belongs under a zone picker — the script list is
+  account-wide. Click one to open that Worker; a route with no Worker behind
+  it says so and stays inert. Needs Zone → Workers Routes → Read, and without
+  it the section is hidden and nothing else changes.
 - Tunnels and Workers now sit under an `ACCOUNT` header. They are
   account-scoped — Cloudflare files them under Compute and Networking, not
   under a domain — so listing them beneath the zone picker implied they

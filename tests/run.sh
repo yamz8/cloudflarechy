@@ -125,6 +125,18 @@ assert_eq "a plan without uniques still returns traffic" "false" "$(field '.anal
 assert_eq "  ... rather than claiming zero visitors" "0" "$(field '.analytics.uniques' <<<"$out")"
 assert_eq "the zone's security level is read" "high" "$(field '.security_level' <<<"$out")"
 
+# Which Workers run on this domain. Zone-scoped, unlike the script list, and
+# the only Workers view that belongs under the zone picker.
+assert_eq "the zone's Workers routes are listed" "3" \
+  "$(field '.routes | length' <<<"$out")"
+assert_eq "  ... sorted by pattern, not by the order they arrived" "assets.example.com/*" \
+  "$(field '.routes[0].pattern' <<<"$out")"
+assert_eq "  ... carrying the script that answers it" "image-resize" \
+  "$(field '.routes[0].script' <<<"$out")"
+assert_eq "  ... and a route with no Worker keeps an empty one" "" \
+  "$(field '.routes[] | select(.id == "r3") | .script' <<<"$out")"
+assert_eq "  ... with no error" "" "$(field '.routes_error' <<<"$out")"
+
 # 10 fives and 5 fours an hour for 24 hours, against 19812 requests.
 assert_eq "server errors are counted" "240" "$(field '.analytics.server_errors' <<<"$out")"
 assert_eq "  ... separately from client errors" "120" "$(field '.analytics.client_errors' <<<"$out")"
@@ -170,6 +182,24 @@ assert_eq "  ... and says the codes are unknown" "false" \
 assert_eq "  ... rather than reporting zero 5xx as fact" "0" \
   "$(field '.analytics.server_errors' <<<"$out2")"
 assert_eq "  ... with no error surfaced" "" "$(field '.analytics_error' <<<"$out2")"
+
+# A zone that has no routes is not the same as a token that cannot look.
+assert_eq "a zone with no routes reports none" "0" \
+  "$(field '.routes | length' <<<"$out2")"
+assert_eq "  ... rather than an error" "" "$(field '.routes_error' <<<"$out2")"
+
+# Routes sit behind their own scope. A token without it loses the section and
+# keeps the rest of the zone, the same way a missing Zone Settings scope costs
+# the Under Attack switch rather than the panel.
+out_noroutes=$(CLOUDFLARE_API_TOKEN=read-only-token run --fresh overview "$ZONE")
+assert_eq "a token that cannot read routes still reads the zone" "example.com" \
+  "$(field '.zone.name' <<<"$out_noroutes")"
+assert_eq "  ... and its traffic" "19812" \
+  "$(field '.analytics.requests' <<<"$out_noroutes")"
+assert_eq "  ... while the routes come back empty" "0" \
+  "$(field '.routes | length' <<<"$out_noroutes")"
+assert_contains "  ... with the reason kept" "Unauthorized" \
+  "$(field '.routes_error' <<<"$out_noroutes")"
 
 # A zone younger than 48 hours has a window but no baseline. A percent change
 # against nothing is not zero, so nothing is what gets reported.

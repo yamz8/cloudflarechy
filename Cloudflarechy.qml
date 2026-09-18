@@ -149,6 +149,13 @@ Panel {
   readonly property bool accountSectionVisible: root.tunnelsSectionVisible
     || root.workersSectionVisible
 
+  // The one Workers view that genuinely belongs under a zone picker: which
+  // scripts run on this domain. The account-wide script list lives below the
+  // scope break with the tunnels.
+  readonly property var routes: root.overview && root.overview.routes
+                                ? root.overview.routes : []
+  readonly property bool routesSectionVisible: root.showWorkers && root.routes.length > 0
+
   // A zone can be failing without anything being switched on, and that is
   // worth opening the panel for too. Guarded by an absolute floor as well as a
   // rate: three 5xx out of four requests at 4am is a true 75% and not news.
@@ -571,6 +578,20 @@ Panel {
     var n = Number(ratio || 0)
     if (!isFinite(n)) return "0%"
     return Math.round(n * 100) + "%"
+  }
+
+  // Hourly buckets arrive as an instant and daily ones as a calendar day, and
+  // the two need different handling: `new Date("2026-09-12")` is parsed as UTC
+  // midnight, which in a western timezone renders as the 11th. A day is a day
+  // wherever you are reading it, so it is built locally from its parts.
+  function bucketLabel(stamp) {
+    var t = String(stamp || "")
+    if (t === "") return ""
+    if (t.indexOf("T") >= 0) return Qt.formatDateTime(new Date(t), "HH:00")
+    var bits = t.split("-")
+    if (bits.length !== 3) return t
+    return Qt.formatDate(new Date(Number(bits[0]), Number(bits[1]) - 1, Number(bits[2])),
+                         "d MMM")
   }
 
   // Period-over-period change, as a share of the earlier value. That is what
@@ -1138,6 +1159,7 @@ Panel {
           }
 
           Sparkline {
+            id: zoneGraph
             width: parent.width
             visible: root.analytics !== null
                      && root.analytics.series !== undefined
@@ -1158,7 +1180,12 @@ Panel {
           // as a quiet one.
           Row {
             width: parent.width
+            // Yields the line to the pointer. Hovering a bar is a question
+            // about that bar, and the answer belongs where you are already
+            // looking rather than in a label floating over the bars it
+            // describes. Nothing moves, because the two share the row.
             visible: root.zone !== null && root.analytics !== null
+                     && zoneGraph.hoveredBucket === null
             spacing: Style.spacing.sm
 
             readonly property bool statusesKnown: root.analytics
@@ -1195,6 +1222,31 @@ Panel {
               color: parent.threatCount > 0 ? Color.urgent : root.foreground
               opacity: parent.threatCount > 0 ? 1.0 : 0.55
               text: root.compact(parent.threatCount) + " threats"
+            }
+          }
+
+          Text {
+            width: parent.width
+            visible: zoneGraph.hoveredBucket !== null
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.7
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: {
+              var b = zoneGraph.hoveredBucket
+              if (!b) return ""
+              var requests = Number(b.requests || 0)
+              var cached = Number(b.cached || 0)
+              var bits = [root.bucketLabel(b.t), root.compact(requests) + " req"]
+              // A bucket that served nothing has no cache share to report, and
+              // "0% cached" would read as a cache that failed rather than one
+              // that was never asked.
+              if (requests > 0) bits.push(root.percent(cached / requests) + " cached")
+              if (Number(b.threats || 0) > 0)
+                bits.push(root.compact(b.threats) + " threats")
+              return bits.join("  \u00b7  ")
             }
           }
 
@@ -1302,6 +1354,88 @@ Panel {
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
             text: root.busyAction !== "" ? "working…" : root.actionStatus
+          }
+
+          // ---- routes -----------------------------------------------------
+          PanelSeparator {
+            width: parent.width
+            visible: root.routesSectionVisible
+            foreground: root.foreground
+          }
+
+          PanelSectionHeader {
+            width: parent.width
+            visible: root.routesSectionVisible
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: "ROUTES  ·  " + root.routes.length
+          }
+
+          Column {
+            width: parent.width
+            visible: root.routesSectionVisible
+            spacing: 0
+
+            Repeater {
+              model: root.routes
+
+              delegate: Rectangle {
+                required property var modelData
+                readonly property string script: String(modelData.script || "")
+                // A route can exist with nothing behind it. Saying so is more
+                // use than a row that looks clickable and answers nothing.
+                readonly property bool runnable: script !== "" && root.accountId !== ""
+
+                width: parent.width
+                height: Style.space(26)
+                radius: Style.cornerRadius / 2
+                color: routeHover.containsMouse && runnable
+                       ? Color.menu.selectedBackground : "transparent"
+
+                MouseArea {
+                  id: routeHover
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: parent.runnable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: if (parent.runnable) root.openWorkerDetail(parent.script)
+                }
+
+                Text {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.right: routePattern.left
+                  anchors.rightMargin: Style.spacing.sm
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  color: root.foreground
+                  opacity: parent.runnable ? 1.0 : 0.55
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  text: parent.runnable ? parent.script : "no Worker"
+                }
+
+                // The pattern is what makes the row a route rather than a
+                // script, so it is elided from the left: the tail of a path is
+                // what distinguishes two routes on the same host.
+                Text {
+                  id: routePattern
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Math.min(implicitWidth, parent.width * 0.55)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  opacity: 0.55
+                  elide: Text.ElideLeft
+                  horizontalAlignment: Text.AlignRight
+                  textFormat: Text.PlainText
+                  text: String(parent.modelData.pattern || "")
+                }
+              }
+            }
           }
 
           // ---- account scope ----------------------------------------------
@@ -1914,6 +2048,7 @@ Panel {
           // hits — in both cases the fill is the part of the hour worth
           // noticing.
           Sparkline {
+            id: workerGraph
             width: parent.width
             visible: workerView.detail !== null
                      && (workerView.detail.series || []).length > 0
@@ -1921,6 +2056,33 @@ Panel {
             fillKey: "errors"
             foreground: root.foreground
             accent: Color.urgent
+          }
+
+          // No line to share with here, so this one is inserted on hover
+          // rather than reserved: an empty band under the graph is a worse
+          // trade than the separator below it moving by a line. It cannot
+          // flicker, because it appears underneath the graph and so never
+          // moves the bars out from under the pointer.
+          Text {
+            width: parent.width
+            visible: workerGraph.hoveredBucket !== null
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: workerGraph.hoveredBucket
+                   && Number(workerGraph.hoveredBucket.errors || 0) > 0
+                   ? Color.urgent : root.foreground
+            opacity: 0.85
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: {
+              var b = workerGraph.hoveredBucket
+              if (!b) return ""
+              var bits = [root.bucketLabel(b.t),
+                          root.compact(Number(b.requests || 0)) + " req"]
+              var errors = Number(b.errors || 0)
+              if (errors > 0) bits.push(root.compact(errors) + " err")
+              return bits.join("  \u00b7  ")
+            }
           }
 
           PanelSeparator {

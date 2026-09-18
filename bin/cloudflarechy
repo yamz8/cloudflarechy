@@ -370,6 +370,23 @@ cmd_overview() {
     level=$("$JQ" -r '.result.value // ""' <<<"$sraw")
   fi
 
+  # Which Workers run on this domain. Cloudflare puts this on the zone page,
+  # and it is the only Workers view that actually belongs under a zone picker —
+  # the script list itself is account-wide. Behind its own scope, so a token
+  # without it loses the section and nothing else.
+  local rraw rerr routes
+  rraw=$(api GET "/zones/$zone/workers/routes")
+  rerr=$(api_error "$rraw")
+  if [[ -n $rerr ]]; then
+    routes='[]'
+  else
+    routes=$("$JQ" -c '[(.result // [])[] | {
+      id:      (.id // ""),
+      pattern: (.pattern // ""),
+      script:  (.script // "")
+    }] | sort_by(.pattern)' <<<"$rraw")
+  fi
+
   local analytics analytics_error
   analytics=$(zone_analytics "$zone" "$range")
   analytics_error=$("$JQ" -r '.error // ""' <<<"$analytics")
@@ -381,6 +398,8 @@ cmd_overview() {
     --arg level_error "$serr" \
     --arg analytics_error "$analytics_error" \
     --arg range "$range" \
+    --argjson routes "$routes" \
+    --arg routes_error "$rerr" \
     --argjson ranges "$("$JQ" -n --args '$ARGS.positional' $(analytics_ranges))" '
     ($zone.result // {}) as $z | {
       zone: {
@@ -399,7 +418,9 @@ cmd_overview() {
       analytics: ($analytics | del(.error)),
       analytics_error: $analytics_error,
       range: $range,
-      ranges: $ranges
+      ranges: $ranges,
+      routes: $routes,
+      routes_error: $routes_error
     }' | cache_and_print "overview.$zone.$range.json"
 }
 
