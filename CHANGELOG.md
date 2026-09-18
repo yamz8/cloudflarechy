@@ -2,6 +2,9 @@
 
 ## 0.8.0
 
+- A Worker nobody called reads as idle rather than broken. Its success rate
+  was rendering as `0%` in red, which says every invocation failed when the
+  truth is that none happened; it now shows `—` and the screen says so.
 - Hovering a bar names its bucket under the graph: the hour or day, the
   requests, the cache share. On the zone chart it takes the 5xx/threats line's
   place rather than adding one, so nothing moves; a Worker's chart has no line

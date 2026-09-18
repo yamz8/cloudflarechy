@@ -1946,6 +1946,11 @@ Panel {
         readonly property var summary: workerView.detail ? workerView.detail.worker : null
         readonly property string failure: workerView.detail
           ? String(workerView.detail.error || "") : ""
+        // A Worker nobody called in this window is not a Worker that failed,
+        // and every figure on this screen is about to be zero. Which zero it
+        // is decides how the screen should read.
+        readonly property bool idle: workerView.summary !== null
+          && Number(workerView.summary.requests || 0) === 0
 
         MouseArea { anchors.fill: parent; hoverEnabled: true }
 
@@ -2019,9 +2024,13 @@ Panel {
 
             Stat {
               width: (parent.width - Style.spacing.sm * 4) / 5
-              value: workerView.summary ? root.percentExact(workerView.summary.success_ratio) : "—"
+              // 0% against no invocations would read as total failure. There
+              // is no success rate for a Worker nothing asked for.
+              value: workerView.summary && !workerView.idle
+                     ? root.percentExact(workerView.summary.success_ratio) : "—"
               label: "success"
-              valueColor: workerView.summary && Number(workerView.summary.success_ratio) < 0.99
+              valueColor: workerView.summary && !workerView.idle
+                          && Number(workerView.summary.success_ratio) < 0.99
                           ? Color.urgent : root.foreground
             }
 
@@ -2189,8 +2198,11 @@ Panel {
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
             // The one number on this screen that is not a total, said plainly
-            // rather than left to be assumed.
-            text: "CPU figures are quantiles of the busiest status, not averages."
+            // rather than left to be assumed. With nothing to take quantiles
+            // of, the screen owes an explanation instead of a caveat.
+            text: workerView.idle
+                  ? "No invocations in this window. The Worker is deployed; nothing called it."
+                  : "CPU figures are quantiles of the busiest status, not averages."
           }
         }
       }
