@@ -133,6 +133,17 @@ Panel {
     return n
   }
 
+  // Tunnels and Workers are account-scoped — Cloudflare files them under
+  // Networking and Compute, not under a domain — so they sit below a scope
+  // break rather than under the zone picker, which governs only the zone
+  // sections above it. Switching zones leaves these lists alone, and saying
+  // so is cheaper than letting the layout imply otherwise.
+  readonly property bool tunnelsSectionVisible: root.showTunnels
+    && (root.tunnels.length > 0 || root.tunnelsError !== "")
+  readonly property bool workersSectionVisible: root.showWorkers && root.workers.length > 0
+  readonly property bool accountSectionVisible: root.tunnelsSectionVisible
+    || root.workersSectionVisible
+
   // A zone can be failing without anything being switched on, and that is
   // worth opening the panel for too. Guarded by an absolute floor as well as a
   // rate: three 5xx out of four requests at 4am is a true 75% and not news.
@@ -967,52 +978,32 @@ Panel {
                 : "LAST 24 HOURS  ·  LOADING"
           }
 
+          // Three slots, not five. At this width five stats leave 76px each,
+          // which is not enough to carry a number and a period-over-period
+          // delta beside it — and these three are the ones Cloudflare's own
+          // zone page leads with.
           Row {
             width: parent.width
             visible: root.zone !== null && root.analytics !== null
             spacing: Style.spacing.sm
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.compact(root.analytics.requests) : "—"
               label: "requests"
             }
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.percent(root.analytics.cache_ratio) : "—"
               label: "cached"
               valueColor: root.brand
             }
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               value: root.analytics ? root.bytes(root.analytics.bytes) : "—"
               label: "served"
-            }
-
-            // The slot visitors used to hold. A zone serving nothing but 5xx
-            // reports the same request count as a healthy one, so without this
-            // the panel renders a failing zone as a quiet one — and visitors is
-            // the stat you would least act on. 4xx stays out of it: a 403 or a
-            // 404 is often the zone working exactly as told.
-            Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
-              value: root.analytics
-                     ? (root.analytics.statuses_known
-                        ? root.compact(root.analytics.server_errors) : "—")
-                     : "—"
-              label: "5xx"
-              valueColor: root.analytics && Number(root.analytics.server_errors) > 0
-                          ? Color.urgent : root.foreground
-            }
-
-            Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
-              value: root.analytics ? root.compact(root.analytics.threats) : "—"
-              label: "threats"
-              valueColor: root.analytics && Number(root.analytics.threats) > 0
-                          ? Color.urgent : root.foreground
             }
           }
 
@@ -1024,6 +1015,57 @@ Panel {
             series: root.analytics ? (root.analytics.series || []) : []
             foreground: root.foreground
             accent: root.brand
+          }
+
+          // 5xx and threats are zero on most zones most of the time, and a
+          // headline slot is the wrong weight for an answer that is usually
+          // "nothing happened". They keep their own line, and earn colour only
+          // when the count is non-zero. 4xx stays out of it: a 403 or a 404 is
+          // often the zone working exactly as told.
+          //
+          // A zone serving nothing but 5xx reports the same request count as a
+          // healthy one, so dropping these entirely would render a failing zone
+          // as a quiet one.
+          Row {
+            width: parent.width
+            visible: root.zone !== null && root.analytics !== null
+            spacing: Style.spacing.sm
+
+            readonly property bool statusesKnown: root.analytics
+              ? root.analytics.statuses_known === true : false
+            readonly property int serverErrors: root.analytics
+              ? Number(root.analytics.server_errors || 0) : 0
+            readonly property int threatCount: root.analytics
+              ? Number(root.analytics.threats || 0) : 0
+
+            Text {
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              textFormat: Text.PlainText
+              color: parent.serverErrors > 0 ? Color.urgent : root.foreground
+              opacity: parent.serverErrors > 0 ? 1.0 : 0.55
+              text: parent.statusesKnown
+                    ? root.compact(parent.serverErrors) + " 5xx"
+                    : "5xx unavailable"
+            }
+
+            Text {
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              textFormat: Text.PlainText
+              color: root.foreground
+              opacity: 0.3
+              text: "·"
+            }
+
+            Text {
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              textFormat: Text.PlainText
+              color: parent.threatCount > 0 ? Color.urgent : root.foreground
+              opacity: parent.threatCount > 0 ? 1.0 : 0.55
+              text: root.compact(parent.threatCount) + " threats"
+            }
           }
 
           Text {
@@ -1132,16 +1174,32 @@ Panel {
             text: root.busyAction !== "" ? "working…" : root.actionStatus
           }
 
-          // ---- tunnels ----------------------------------------------------
+          // ---- account scope ----------------------------------------------
+          // Everything from here down belongs to the account, not to the zone
+          // in the picker.
           PanelSeparator {
             width: parent.width
-            visible: root.showTunnels && (root.tunnels.length > 0 || root.tunnelsError !== "")
+            visible: root.accountSectionVisible
             foreground: root.foreground
           }
 
+          // Recedes on purpose. This names the scope of what follows; Tunnels
+          // and Workers are the sections you came to read, so they keep full
+          // weight and this sits behind them.
           PanelSectionHeader {
             width: parent.width
-            visible: root.showTunnels && (root.tunnels.length > 0 || root.tunnelsError !== "")
+            visible: root.accountSectionVisible
+            opacity: 0.7
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: root.accountName !== "" ? "ACCOUNT  ·  " + root.accountName : "ACCOUNT"
+          }
+
+          // ---- tunnels ----------------------------------------------------
+          PanelSectionHeader {
+            width: parent.width
+            visible: root.tunnelsSectionVisible
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
@@ -1153,7 +1211,7 @@ Panel {
 
           Column {
             width: parent.width
-            visible: root.showTunnels && root.tunnels.length > 0
+            visible: root.tunnelsSectionVisible && root.tunnels.length > 0
             spacing: 0
 
             Repeater {
@@ -1236,13 +1294,13 @@ Panel {
           // ---- workers ----------------------------------------------------
           PanelSeparator {
             width: parent.width
-            visible: root.showWorkers && root.workers.length > 0
+            visible: root.workersSectionVisible && root.tunnelsSectionVisible
             foreground: root.foreground
           }
 
           PanelSectionHeader {
             width: parent.width
-            visible: root.showWorkers && root.workers.length > 0
+            visible: root.workersSectionVisible
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
@@ -1251,7 +1309,7 @@ Panel {
 
           Column {
             width: parent.width
-            visible: root.showWorkers && root.workers.length > 0
+            visible: root.workersSectionVisible
             spacing: 0
 
             Repeater {
