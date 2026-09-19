@@ -27,6 +27,10 @@ ZONE2 = "b" * 32
 # before them, which is the case where a delta has no baseline to report.
 ZONE_NEW = "c" * 32
 ACCOUNT = "0f9e8d7c6b5a40312f1e0d9c8b7a6554"
+# A zone with hours in which nothing happened. Cloudflare returns no row at all
+# for an empty bucket, so the response is shorter than the window — the case
+# where a graph that trusts the row count draws the wrong number of bars.
+ZONE_QUIET = "d" * 32
 # An account whose Workers list is readable but whose invocation analytics are
 # not — the plugin should still list the scripts.
 ACCOUNT_NO_METRICS = "1" * 32
@@ -173,13 +177,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/zones":
             return self.reply(ok([zone_object(),
                                   zone_object(ZONE2, "second.dev"),
-                                  zone_object(ZONE_NEW, "brandnew.dev")]))
+                                  zone_object(ZONE_NEW, "brandnew.dev"),
+                                  zone_object(ZONE_QUIET, "quiet.dev")]))
         if path == f"/zones/{ZONE}":
             return self.reply(ok(zone_object()))
         if path == f"/zones/{ZONE2}":
             return self.reply(ok(zone_object(ZONE2, "second.dev")))
         if path == f"/zones/{ZONE_NEW}":
             return self.reply(ok(zone_object(ZONE_NEW, "brandnew.dev")))
+        if path == f"/zones/{ZONE_QUIET}":
+            return self.reply(ok(zone_object(ZONE_QUIET, "quiet.dev")))
         if re.fullmatch(r"/zones/\w+/workers/routes", path):
             # Its own scope, so a read-only credential loses the section and
             # keeps everything else.
@@ -253,11 +260,24 @@ class Handler(BaseHTTPRequestHandler):
                 # requests, and two hours that also threw five exceptions.
                 if "datetimeHour" in query:
                     script = variables.get("script", "")
-                    if script != "api-router":
+                    if script not in ("api-router", "image-resize"):
                         return self.reply({"data": {"viewer": {"accounts": [
                             {"workersInvocationsAdaptive": []}]}}, "errors": None})
                     now = datetime.datetime.now(datetime.timezone.utc).replace(
                         minute=0, second=0, microsecond=0)
+                    if script == "image-resize":
+                        # Twelve invocations, every one of them thrown: the
+                        # totals the account-wide list reports for it.
+                        rows = [{
+                            "dimensions": {
+                                "datetimeHour": (now - datetime.timedelta(hours=h)).strftime(
+                                    "%Y-%m-%dT%H:00:00Z"),
+                                "status": "scriptThrewException"},
+                            "sum": {"requests": 6, "errors": 6, "subrequests": 0},
+                            "quantiles": {"cpuTimeP50": 457, "cpuTimeP99": 900},
+                        } for h in (2, 1)]
+                        return self.reply({"data": {"viewer": {"accounts": [
+                            {"workersInvocationsAdaptive": rows}]}}, "errors": None})
                     rows = []
                     for i in range(24):
                         hour = (now - datetime.timedelta(hours=23 - i)).strftime(
@@ -276,16 +296,21 @@ class Handler(BaseHTTPRequestHandler):
                             })
                     return self.reply({"data": {"viewer": {"accounts": [
                         {"workersInvocationsAdaptive": rows}]}}, "errors": None})
+                # These totals are the same invocations the per-script query
+                # below reports, split the same way. They have to be: the panel
+                # lists a Worker here and then opens it there, and a fixture
+                # that disagrees with itself makes a working drill-down look
+                # broken. 2400 good + 10 thrown = 2410, ten of them errors.
                 return self.reply({"data": {"viewer": {"accounts": [{
                     "workersInvocationsAdaptive": [
                         {"dimensions": {"scriptName": "api-router", "status": "success"},
-                         "sum": {"requests": 3000, "errors": 0, "subrequests": 120},
+                         "sum": {"requests": 2400, "errors": 0, "subrequests": 48},
                          "quantiles": {"cpuTimeP50": 8644}},
                         # A second, quieter status for the same script: requests
                         # add up, the p50 comes from the busier one.
-                        {"dimensions": {"scriptName": "api-router", "status": "clientDisconnected"},
-                         "sum": {"requests": 40, "errors": 0, "subrequests": 0},
-                         "quantiles": {"cpuTimeP50": 99999}},
+                        {"dimensions": {"scriptName": "api-router", "status": "scriptThrewException"},
+                         "sum": {"requests": 10, "errors": 10, "subrequests": 0},
+                         "quantiles": {"cpuTimeP50": 457}},
                         {"dimensions": {"scriptName": "image-resize", "status": "scriptThrewException"},
                          "sum": {"requests": 12, "errors": 12, "subrequests": 0},
                          "quantiles": {"cpuTimeP50": 457}},
@@ -310,6 +335,10 @@ class Handler(BaseHTTPRequestHandler):
             if variables.get("zone") == ZONE_NEW:
                 # Only the recent half exists, so there is no baseline.
                 groups = groups[len(groups) // 2:]
+            if variables.get("zone") == ZONE_QUIET:
+                # Four hours in which nothing was served, delivered the way
+                # Cloudflare delivers them: not as zeroes, but not at all.
+                groups = [g for i, g in enumerate(groups) if i not in (30, 31, 44, 45)]
             return self.reply({"data": {"viewer": {"zones": [
                 {key: groups}]}}, "errors": None})
         if path.endswith("/purge_cache"):

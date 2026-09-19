@@ -45,12 +45,19 @@ Item {
   // draw the figure itself: at this width a floating label would cover the
   // bars it is describing, so the panel reads this and prints it on the line
   // below, where there is already room.
-  property int hoveredIndex: -1
+  //
+  // Derived, never assigned. One MouseArea per bar, setting this on `entered`
+  // and clearing it on `exited`, left the readout frozen: the panel went on
+  // printing a bucket with the pointer a hundred pixels outside the card, and
+  // only closing the panel cleared it. `exited` is not reliably delivered to a
+  // layer-shell surface, so anything that depends on it eventually goes stale.
+  // A binding cannot: the instant `containsMouse` is false this is -1 again,
+  // whatever the compositor did or did not send.
+  readonly property int hoveredIndex: pointer.containsMouse
+                                      ? pointer.bucketAt(pointer.mouseX) : -1
   readonly property var hoveredBucket: root.hoveredIndex >= 0
                                        && root.hoveredIndex < root.series.length
                                        ? root.series[root.hoveredIndex] : null
-
-  onSeriesChanged: root.hoveredIndex = -1
 
   readonly property real peak: {
     var max = 0
@@ -100,10 +107,13 @@ Item {
           // cap is the radius a 24-bucket bar already had, so the hourly view
           // is unchanged and the others match it.
           radius: Math.min(width, height, Style.space(15)) / 3
-          color: parent.ratio > 0 ? Qt.rgba(root.foreground.r, root.foreground.g,
-                                            root.foreground.b, 0.22)
-                                  : Qt.rgba(root.foreground.r, root.foreground.g,
-                                            root.foreground.b, 0.10)
+          // The hovered bar lifts out of the row. Without it the line below
+          // names an hour the eye cannot find again among twenty-three
+          // identical neighbours.
+          readonly property real shade: root.hoveredIndex === bucket.index ? 0.42
+                                        : parent.ratio > 0 ? 0.22 : 0.10
+          color: Qt.rgba(root.foreground.r, root.foreground.g,
+                         root.foreground.b, shade)
 
           Rectangle {
             anchors.bottom: parent.bottom
@@ -119,17 +129,32 @@ Item {
             opacity: 0.85
           }
         }
-
-        // Over the whole slot, not just the drawn bar: a quiet bucket is one
-        // pixel tall and would be unpointable otherwise, and a quiet bucket is
-        // often the one worth asking about.
-        MouseArea {
-          anchors.fill: parent
-          hoverEnabled: true
-          onEntered: root.hoveredIndex = bucket.index
-          onExited: if (root.hoveredIndex === bucket.index) root.hoveredIndex = -1
-        }
       }
+    }
+  }
+
+  // One area over the whole row rather than one per bar: the index is worked
+  // out from the pointer's own x, so there is no per-bar state to be left
+  // behind. It covers the full height, not just the drawn bars — a quiet hour
+  // is one pixel tall and would be unpointable otherwise, and a quiet hour is
+  // often the one worth asking about.
+  MouseArea {
+    id: pointer
+    anchors.fill: parent
+    hoverEnabled: true
+    // The chart answers questions; it does not take clicks. Letting them
+    // through keeps whatever sits beneath it reachable.
+    acceptedButtons: Qt.NoButton
+
+    // Bars are laid out by a Row, so each occupies (width + spacing) / n —
+    // the trailing bar has no spacing after it, which is why the spacing is
+    // added to the width before dividing rather than subtracted from it.
+    function bucketAt(x: real): int {
+      var n = root.series.length
+      if (n <= 0 || root.width <= 0) return -1
+      var slot = (root.width + root.barSpacing) / n
+      var i = Math.floor(x / slot)
+      return i < 0 ? -1 : (i >= n ? n - 1 : i)
     }
   }
 }

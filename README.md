@@ -88,7 +88,7 @@ token can be minted with exactly those:
 |---|---|---|
 | Zone → Zone → Read | the zone list, plan, status | nothing works |
 | Zone → Analytics → Read | the traffic numbers and the graph | traffic section says so |
-| Zone → Workers Routes → Read | which Workers run on this domain | Routes section hidden |
+| Zone → Workers Routes → Read | which Workers run on this domain | Routes section says so |
 | Zone → Zone Settings → Read | Development Mode, security level | the two switches grey out |
 | Zone → Zone Settings → Edit | flipping those two switches | they stay read-only |
 | Zone → Cache Purge → Purge | Purge cache | the button errors |
@@ -146,7 +146,9 @@ the row itself would have.
 zone-scoped: it changes with the zone picker, unlike the Workers list below the
 account break, which is every script in the account. The same Worker can appear
 in both, for different reasons. Click one to open its detail view; a route with
-no Worker behind it says so and stays inert.
+no Worker behind it says so and stays inert. Without the scope the section
+names the refusal instead of vanishing — a zone with no routes and a token that
+may not look are opposite problems and should not read alike.
 
 **Traffic** — requests, share served from cache, bytes served, each with how it
 compares to the window before it; then one bar per bucket. Each bar is that
@@ -180,7 +182,14 @@ Point at a bar and the line under the graph names that bucket — its hour or
 day, its requests, its cache share. It replaces the 5xx/threats line rather
 than appearing beside it, so nothing moves. On a Worker's graph the same hover
 reports requests and errors, and there it is inserted under the bars, which
-cannot move them out from under the pointer.
+cannot move them out from under the pointer. The bar being read is lit while
+you are on it.
+
+An hour with no traffic is drawn as an empty slot rather than closed up.
+Cloudflare returns no row at all for a bucket in which nothing happened, so the
+window is rebuilt from the clock before anything is drawn; a graph that trusted
+the rows would show a quiet night as fewer, wider bars and read as steady
+traffic through hours that had none.
 
 Bar heights are square-rooted, scaled against the busiest hour in the window.
 Two real shapes settled that. A zone idling at 16 requests an hour took a
@@ -232,6 +241,12 @@ Each status keeps its own quantiles rather than inheriting the headline pair.
 The success rate never rounds up to 100%: a Worker at 99.6% is not a Worker
 with no failures. `Esc` or the arrow goes back; **Dashboard** opens that
 Worker's metrics tab.
+
+This view is always the last 24 hours, whatever window the zone is showing.
+Invocation analytics are not retained far enough back to offer the week and the
+month the traffic graph does, so rather than a selector with two options that
+would usually be empty, the window is fixed — and the heading says so when you
+arrived from a wider one.
 
 Deliberately absent: DNS records, firewall rules, R2, Pages. Those are editing
 surfaces, and editing them from a popup you opened by accident is a bad idea.

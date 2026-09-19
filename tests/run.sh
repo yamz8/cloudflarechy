@@ -21,6 +21,7 @@ ZONE2=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 ACCOUNT=0f9e8d7c6b5a40312f1e0d9c8b7a6554
 ACCOUNT_NO_METRICS=11111111111111111111111111111111
 ZONE_NEW=cccccccccccccccccccccccccccccccc
+ZONE_QUIET=dddddddddddddddddddddddddddddddd
 
 passed=0
 failed=0
@@ -113,7 +114,7 @@ assert_eq "an API token outranks wrangler" "api" "$(field .token_kind <<<"$out")
 assert_eq "  ... and is not read-only" "false" "$(field .read_only <<<"$out")"
 
 out=$(run --fresh zones)
-assert_eq "zones are listed" "3" "$(field '.zones | length' <<<"$out")"
+assert_eq "zones are listed" "4" "$(field '.zones | length' <<<"$out")"
 assert_eq "  ... with the account attached" "$ACCOUNT" "$(field '.zones[0].account_id' <<<"$out")"
 assert_eq "  ... and the plan" "Free Website" "$(field '.zones[0].plan' <<<"$out")"
 
@@ -215,6 +216,20 @@ assert_eq "  ... naming no comparison period" "" \
 assert_eq "  ... and offering no baseline to read" "null" \
   "$(field '.analytics.previous' <<<"$out3")"
 
+# Cloudflare omits a bucket entirely when nothing happened in it, so the window
+# has to be rebuilt from the clock rather than from the rows. A graph fed the
+# rows alone draws twenty bars for a day and widens each one to cover the gap,
+# which reads as steady traffic through hours that had none.
+out_quiet=$(run --fresh overview "$ZONE_QUIET")
+assert_eq "an hour with no traffic still gets a bucket" "24" \
+  "$(field '.analytics.series | length' <<<"$out_quiet")"
+assert_eq "  ... drawn as zero rather than left out" "4" \
+  "$(field '[.analytics.series[] | select(.requests == 0)] | length' <<<"$out_quiet")"
+assert_eq "  ... in the place on the clock where it happened" "0" \
+  "$(field '.analytics.series[6].requests' <<<"$out_quiet")"
+assert_eq "  ... and the hours around it keep their own figures" "437" \
+  "$(field '.analytics.series[1].requests' <<<"$out_quiet")"
+
 # 7 and 30 days come from a different dataset than 24 hours, keyed on a `date`
 # of GraphQL type Date rather than a `datetime` of type Time. A query built for
 # one and aimed at the other fails outright, so each range is walked.
@@ -273,10 +288,10 @@ assert_eq "  ... and a status" "down" "$(field '.tunnels[1].status' <<<"$out")"
 
 out=$(run --fresh workers "$ACCOUNT")
 assert_eq "workers are busiest first" "api-router" "$(field '.workers[0].name' <<<"$out")"
-assert_eq "  ... with requests summed across statuses" "3040" "$(field '.workers[0].requests' <<<"$out")"
+assert_eq "  ... with requests summed across statuses" "2410" "$(field '.workers[0].requests' <<<"$out")"
 assert_eq "  ... and the p50 of the busiest status, not an average" "8644" \
   "$(field '.workers[0].cpu_p50_us' <<<"$out")"
-assert_eq "  ... and subrequests" "120" "$(field '.workers[0].subrequests' <<<"$out")"
+assert_eq "  ... and subrequests" "48" "$(field '.workers[0].subrequests' <<<"$out")"
 assert_eq "a failing worker reports its errors" "12" \
   "$(field '.workers | map(select(.name == "image-resize"))[0].errors' <<<"$out")"
 # A script nobody invoked has no analytics row at all, which is not the same as
@@ -309,6 +324,30 @@ assert_eq "  ... and its errors" "10" "$(field '.statuses[1].errors' <<<"$out")"
 assert_eq "an hour per bucket" "24" "$(field '.series | length' <<<"$out")"
 assert_eq "  ... carrying that hour's errors" "5" "$(field '.series[5].errors' <<<"$out")"
 assert_eq "  ... and its requests" "105" "$(field '.series[5].requests' <<<"$out")"
+
+# The panel lists a Worker and then opens it. Checked against each other
+# rather than each against its own constant, because the way these drifted was
+# that both were individually right and together nonsense: the list said 3.0K
+# requests and no errors, the detail said 2.4K and ten.
+for script in api-router image-resize; do
+  listed=$(run --fresh workers "$ACCOUNT" \
+           | jq -c --arg s "$script" '.workers | map(select(.name == $s))[0]')
+  detail=$(run --fresh worker "$ACCOUNT" "$script")
+  assert_eq "$script reads the same listed as opened" \
+    "$(field '.requests' <<<"$listed")" "$(field '.worker.requests' <<<"$detail")"
+  assert_eq "  ... down to its errors" \
+    "$(field '.errors' <<<"$listed")" "$(field '.worker.errors' <<<"$detail")"
+done
+
+# Same rule for a Worker: one that answers a cron a few times a day is idle for
+# most of it, and the idle hours are the shape of the thing.
+out=$(run --fresh worker "$ACCOUNT" image-resize)
+assert_eq "a Worker idle most of the day still gets the whole day" "24" \
+  "$(field '.series | length' <<<"$out")"
+assert_eq "  ... with the quiet hours at zero" "22" \
+  "$(field '[.series[] | select(.requests == 0)] | length' <<<"$out")"
+assert_eq "  ... and the busy ones adding up to what it did" "12" \
+  "$(field '[.series[].requests] | add' <<<"$out")"
 
 out=$(run --fresh worker "$ACCOUNT" nonexistent-script)
 assert_eq "a script with no invocations is empty, not an error" "0" \
@@ -359,7 +398,7 @@ run --fresh zones >/dev/null
 assert_eq "a read is cached" "1" "$(ls "$XDG_CACHE_HOME/cloudflarechy/zones.json" 2>/dev/null | wc -l)"
 printf '{"zones":[{"id":"cached"}]}' > "$XDG_CACHE_HOME/cloudflarechy/zones.json"
 assert_eq "  ... and served from cache" "cached" "$(run zones | field '.zones[0].id')"
-assert_eq "  ... until --fresh" "3" "$(run --fresh zones | field '.zones | length')"
+assert_eq "  ... until --fresh" "4" "$(run --fresh zones | field '.zones | length')"
 
 echo
 echo "saving a token"

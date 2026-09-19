@@ -448,6 +448,19 @@ analytics_range_spec() {
 
 analytics_ranges() { echo "24h 7d 30d"; }
 
+# Every bucket the window covers, whether or not the API returned a row for it.
+# Cloudflare omits a bucket entirely when nothing happened in it, so a quiet
+# night comes back as a short array — and a chart that divides its width by the
+# number of rows drew eighteen fat bars for a day instead of twenty-four with
+# gaps in them. The gaps are the point: an hour with no traffic is a thing the
+# graph should show, not a thing it should close up.
+window_stamps() {
+  local count="$1" unit="$2" fmt="$3" i
+  for ((i = count - 1; i >= 0; i--)); do
+    date -u -d "-$i $unit" "$fmt" 2>/dev/null || return 1
+  done
+}
+
 zone_analytics() {
   local zone="$1" range="${2:-24h}" raw err
   local dataset dimension gqltype limit from midpoint to label fmt since mid till
@@ -466,6 +479,13 @@ zone_analytics() {
     "$JQ" -n '{error: "could not compute a time window (needs GNU date)"}'
     return
   fi
+
+  # "previous 24 hours" / "previous 7 days": the count and unit of the window
+  # the graph draws, which is half of what the query asks for.
+  local wcount wunit stamps
+  wcount=${label#* }; wcount=${wcount%% *}
+  wunit=${label##* }
+  stamps=$(window_stamps "$wcount" "$wunit" "$fmt" | "$JQ" -Rn '[inputs]')
 
   local vars
   vars=$("$JQ" -n --arg z "$zone" --arg s "$since" --arg u "$till" \
@@ -497,7 +517,7 @@ zone_analytics() {
   fi
 
   "$JQ" --arg mid "$mid" --arg dataset "$dataset" --arg dim "$dimension" \
-        --arg label "$label" '
+        --arg label "$label" --argjson stamps "$stamps" '
     # One window, summed. Used twice: once for the last 24 hours and once for
     # the 24 before it, so the two are guaranteed to be measured the same way.
     def totals:
@@ -558,14 +578,20 @@ zone_analytics() {
         bytes_delta:       (if $comparable then rel($now.bytes; $prev.bytes) else null end),
         cache_ratio_delta: (if $comparable then rel($now.cache_ratio; $prev.cache_ratio) else null end),
         # The graph draws the window only. The earlier one is a baseline, not
-        # something to show.
-        series: [ $window[] | {
-          t:        (.dimensions[$dim] // .dimensions.datetime // ""),
-          requests: (.sum.requests // 0),
-          cached:   (.sum.cachedRequests // 0),
-          threats:  (.sum.threats // 0),
-          bytes:    (.sum.bytes // 0)
-        } ]
+        # something to show. Walked over every stamp in the window rather than
+        # over the rows that came back, so a bucket the API left out is drawn
+        # as the empty hour it was.
+        series: ( ($window
+                   | map({ key: (.dimensions[$dim] // .dimensions.datetime // ""),
+                           value: . })
+                   | from_entries) as $rows
+                  | $stamps | map(. as $t | ($rows[$t] // {}) | {
+                      t:        $t,
+                      requests: (.sum.requests // 0),
+                      cached:   (.sum.cachedRequests // 0),
+                      threats:  (.sum.threats // 0),
+                      bytes:    (.sum.bytes // 0)
+                    }) )
       }' <<<"$raw"
 }
 
@@ -757,6 +783,12 @@ cmd_worker() {
     }
   }
 }'
+  # Same reason as the zone graph: an hour in which a Worker was not invoked
+  # comes back as no row at all, and a Worker that runs on a cron every few
+  # hours would otherwise be drawn as three bars filling the whole width.
+  local stamps
+  stamps=$(window_stamps 24 hours +%Y-%m-%dT%H:00:00Z | "$JQ" -Rn '[inputs]')
+
   vars=$("$JQ" -n --arg a "$account" --arg s "$script" --arg since "$since" --arg u "$till" \
     '{account: $a, script: $s, since: $since, until: $u}')
 
@@ -771,7 +803,7 @@ cmd_worker() {
   # Quantiles are never summed or averaged: for each status the figure kept is
   # the one from that status'"'"'s busiest hour, which is the population it
   # actually describes. Requests and errors do add up.
-  "$JQ" --arg name "$script" '
+  "$JQ" --arg name "$script" --argjson stamps "$stamps" '
     ((.data.viewer.accounts // [])[0].workersInvocationsAdaptive // []) as $rows
     | (reduce $rows[] as $r ({};
         ($r.dimensions.status // "unknown") as $status
@@ -812,7 +844,11 @@ cmd_worker() {
           hours: ($by_hour | length)
         },
         statuses: ([$by_status[] | del(.busiest)] | sort_by(.requests) | reverse),
-        series:   ([$by_hour[]] | sort_by(.t)),
+        series:   ($stamps | map(. as $t | ($by_hour[$t] // {}) | {
+                     t:        $t,
+                     requests: (.requests // 0),
+                     errors:   (.errors // 0)
+                   })),
         error: ""
       }' <<<"$raw" | cache_and_print "worker.$account.$script.json"
 }

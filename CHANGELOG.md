@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.8.1
+
+- The graph stops reporting an hour the pointer left. Hover was tracked by one
+  MouseArea per bar setting an index on `entered` and clearing it on `exited`,
+  and `exited` is not reliably delivered to a layer-shell surface: the readout
+  froze on whichever bucket it had last seen and stayed there, with the cursor
+  a hundred pixels outside the panel, until the panel was closed. One area over
+  the whole row now derives the bucket from the pointer's own position, so
+  there is no state left to go stale. The bar being read is also lit, which it
+  never was.
+- An hour in which nothing happened is drawn as an empty hour. Cloudflare
+  returns no row at all for an empty bucket, so a quiet night arrived as a
+  short array and the chart divided its width by however many rows it got —
+  twenty fat bars for a day, reading as steady traffic through hours that had
+  none. Both graphs now rebuild the window from the clock. A Worker that runs
+  on a cron was the worst of it: three invocations became three slabs filling
+  the panel.
+- Routes say when they cannot be read. A token without Workers Routes → Read
+  got the same empty section as a zone that genuinely has no routes, which are
+  opposite problems — one is nothing to do, the other is a scope to add. The
+  refusal was in the data all along and the panel was dropping it; tunnels and
+  Workers have always reported theirs.
+- A route row names its Worker. With a long script and a long pattern both
+  columns elided at once, so two routes on one host rendered as
+  `edge-personalisati… …y-long-path-segment/deeper-1/*` and differed by a
+  character near the right edge. The script name now takes the room it needs
+  and the pattern is cut from the middle, keeping the host and the tail.
+- Opening a Worker no longer changes the window behind your back. Invocation
+  analytics do not reach back far enough to offer the week and the month the
+  traffic graph offers, so the Worker view stays on its own 24 hours — and now
+  says so when the zone is showing something else.
+- The wrangler command is printed under its button rather than hung off it as
+  a tooltip, which drew upward through the paragraph above it and past the
+  panel's left edge.
+
 ## 0.8.0
 
 - The panel fits again. It was capped at the same fixed height as the agents

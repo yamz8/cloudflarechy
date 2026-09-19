@@ -220,7 +220,16 @@ Panel {
   // scope break with the tunnels.
   readonly property var routes: root.overview && root.overview.routes
                                 ? root.overview.routes : []
-  readonly property bool routesSectionVisible: root.showWorkers && root.routes.length > 0
+  // Routes sit behind their own scope, so "this zone has no routes" and "this
+  // token may not look" arrive as the same empty list. Told apart, because
+  // they call for opposite responses: one is nothing to do, the other is a
+  // scope to add. Tunnels and Workers already say so when they are refused;
+  // this section used to drop the refusal and simply not appear.
+  readonly property string routesError: root.overview && root.overview.routes_error
+                                        ? String(root.overview.routes_error) : ""
+  readonly property bool routesSectionVisible: root.showWorkers
+                                               && (root.routes.length > 0
+                                                   || root.routesError !== "")
 
   // A zone can be failing without anything being switched on, and that is
   // worth opening the panel for too. Guarded by an absolute floor as well as a
@@ -1485,7 +1494,8 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
-            text: "ROUTES  ·  " + root.routes.length
+            text: root.routesError !== "" ? "ROUTES"
+                                          : "ROUTES  ·  " + root.routes.length
           }
 
           Column {
@@ -1517,12 +1527,18 @@ Panel {
                   onClicked: if (parent.runnable) root.openWorkerDetail(parent.script)
                 }
 
+                // The script name takes the room it needs before the pattern
+                // gets any. It is the identifier on this row — the thing you
+                // click and the thing the Worker sections call it — and when
+                // the two shared the width evenly both ended up elided, so a
+                // row read `edge-personalisati…  …y-long-path-segment/deeper-1/*`
+                // and named nothing at all.
                 Text {
+                  id: routeScript
                   anchors.left: parent.left
                   anchors.leftMargin: Style.spacing.rowPaddingX
-                  anchors.right: routePattern.left
-                  anchors.rightMargin: Style.spacing.sm
                   anchors.verticalCenter: parent.verticalCenter
+                  width: Math.min(implicitWidth, parent.width * 0.62)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   color: root.foreground
@@ -1532,20 +1548,22 @@ Panel {
                   text: parent.runnable ? parent.script : "no Worker"
                 }
 
-                // The pattern is what makes the row a route rather than a
-                // script, so it is elided from the left: the tail of a path is
-                // what distinguishes two routes on the same host.
+                // Elided in the middle rather than from the left. A pattern
+                // has two informative ends — the host says which site, the
+                // tail says which route — and cutting from the left threw the
+                // host away to save a path segment nobody reads.
                 Text {
                   id: routePattern
+                  anchors.left: routeScript.right
+                  anchors.leftMargin: Style.spacing.sm
                   anchors.right: parent.right
                   anchors.rightMargin: Style.spacing.rowPaddingX
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Math.min(implicitWidth, parent.width * 0.55)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.foreground
                   opacity: 0.55
-                  elide: Text.ElideLeft
+                  elide: Text.ElideMiddle
                   horizontalAlignment: Text.AlignRight
                   textFormat: Text.PlainText
                   text: String(parent.modelData.pattern || "")
@@ -1558,6 +1576,21 @@ Panel {
               destination: "dashboard"
               onActivated: root.openDashboard()
             }
+          }
+
+          // Said in the same voice the tunnels and Workers sections use when
+          // they are refused, and naming the scope that would fix it — the
+          // refusal Cloudflare returns is about resources, not about scopes.
+          Text {
+            width: parent.width
+            visible: root.routesSectionVisible && root.routesError !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.55
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: root.routesError + " — add Zone → Workers Routes → Read"
           }
 
           // ---- account scope ----------------------------------------------
@@ -1928,7 +1961,11 @@ Panel {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               text: setupView.session === "active" ? "Sign in again" : "Sign in with wrangler"
-              tooltipText: setupView.info ? String(setupView.info.wrangler_command || "") : ""
+              // The command this runs is printed below the button instead of
+              // hung off it as a tooltip. The tooltip drew upward, straight
+              // through the paragraph above, and its left edge landed outside
+              // the panel — and a button that shells out has no business
+              // hiding what it will run behind a hover anyway.
               enabled: setupView.wranglerReady
               foreground: root.foreground
               bordered: true
@@ -1953,6 +1990,20 @@ Panel {
                   : setupView.session === "expired" ? "session expired"
                   : ""
             }
+          }
+
+          // Said plainly, in the terminal's own voice: this is the line that
+          // will run, and a browser will open on it.
+          Text {
+            width: parent.width
+            visible: setupView.wranglerReady && text !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.4
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: setupView.info ? String(setupView.info.wrangler_command || "") : ""
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
@@ -2140,8 +2191,17 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
+            // Always the last 24 hours, whatever window the zone is showing.
+            // Invocation analytics are not retained far enough back to offer
+            // the week and the month the traffic graph offers, so rather than
+            // a selector with two options that would often be empty, the
+            // window is fixed — and said out loud when it differs from the
+            // one you arrived from, because otherwise drilling into a Worker
+            // silently changes the question being asked.
             text: root.workerDetailLoading ? "LAST 24 HOURS  ·  LOADING"
                 : workerView.failure !== "" ? "LAST 24 HOURS  ·  UNAVAILABLE"
+                : root.range !== "24h" ? "LAST 24 HOURS  ·  ZONE SHOWS "
+                                         + root.rangeLabel(root.range)
                 : "LAST 24 HOURS"
           }
 
