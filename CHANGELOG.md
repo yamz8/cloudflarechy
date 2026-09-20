@@ -2,6 +2,12 @@
 
 ## 0.9.0
 
+- The account line says it goes somewhere. Every other row that opens something
+  sits under a heading implying its rows are things — a Worker under WORKERS, a
+  route under ROUTES — but this one stands alone under a rule and read as a
+  line of figures, with the pointing hand only arriving once you were already
+  over it. It carries a chevron now.
+
 - The account has its own screen. Tunnels and Workers never belonged to the
   zone in the picker — switching zones changes none of those rows — but they
   sat underneath it and read as though they did. `a` opens them, `Esc` comes

@@ -157,16 +157,14 @@ Panel {
   readonly property bool accountSectionVisible: root.tunnelsSectionVisible
     || root.workersSectionVisible
 
-  // How many rows a list section will show before it starts summarising. The
-  // panel is capped at the same height as every other first-party popup, and
-  // three sections that each grow without limit do not fit in it — an account
-  // with twenty Workers used to render twenty rows, most of them below the
-  // fold and reachable only by wheel.
+  // How many rows a list section will show before it starts summarising. Only
+  // Routes caps now — tunnels and Workers moved to the account screen, which
+  // has the room to list all of them — but a zone fronted by thirty routes
+  // would still push everything under it below the fold.
   //
-  // What gets cut matters more than how much. Each list is ranked so the rows
-  // worth opening the panel for are the ones that survive: a tunnel that is
-  // down, a Worker that is throwing. The count in the heading stays the true
-  // total either way.
+  // What gets cut matters more than how much, so the list is ranked first and
+  // the rows worth opening the panel for are the ones that survive. The count
+  // in the heading stays the true total either way.
   readonly property int listCap: 3
 
   function tunnelRank(t) {
@@ -230,15 +228,12 @@ Panel {
     return all.length <= root.listCap + 1 ? 0 : all.length - root.listCap
   }
 
-  // The account screen has room for all of them; the summary line on the zone
-  // panel is what the cap used to be for.
+  // The account screen has room for all of them, so these are ranked but not
+  // cut: a tunnel that is down still sorts to the top of the list, which is
+  // what you opened the screen to find.
   readonly property var rankedTunnels: root.rankedBy(root.tunnels, root.tunnelRank)
   readonly property var rankedWorkers: root.rankedBy(root.workers, root.workerRank)
 
-  readonly property var shownTunnels: root.capList(root.rankedBy(root.tunnels, root.tunnelRank))
-  readonly property int hiddenTunnels: root.hiddenCount(root.tunnels)
-  readonly property var shownWorkers: root.capList(root.rankedBy(root.workers, root.workerRank))
-  readonly property int hiddenWorkers: root.hiddenCount(root.workers)
   readonly property var shownRoutes: root.capList(root.rankedBy(root.routes, root.routeRank))
   readonly property int hiddenRoutes: root.hiddenCount(root.routes)
 
@@ -1684,6 +1679,23 @@ Panel {
               onClicked: root.openAccountView()
             }
 
+            // Every other row that opens something sits inside a heading that
+            // implies its rows are things — a Worker under WORKERS, a route
+            // under ROUTES. This one stands alone under a rule and reads as a
+            // line of figures, so it says out loud that it goes somewhere.
+            Text {
+              id: accountChevron
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.rowPaddingX
+              anchors.verticalCenter: parent.verticalCenter
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              color: root.foreground
+              opacity: accountHover.containsMouse ? 0.9 : 0.4
+              textFormat: Text.PlainText
+              text: "\u203a"
+            }
+
             Text {
               anchors.left: parent.left
               anchors.leftMargin: Style.spacing.rowPaddingX
@@ -1703,8 +1715,8 @@ Panel {
             // would have painted "3 Workers" red because a tunnel was down.
             Row {
               id: accountState
-              anchors.right: parent.right
-              anchors.rightMargin: Style.spacing.rowPaddingX
+              anchors.right: accountChevron.left
+              anchors.rightMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               spacing: 0
 
