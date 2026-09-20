@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0
+
+- The account has its own screen. Tunnels and Workers never belonged to the
+  zone in the picker — switching zones changes none of those rows — but they
+  sat underneath it and read as though they did. `a` opens them, `Esc` comes
+  back, and the zone panel keeps one line: the account's name, how many
+  tunnels are down, how many Workers there are. That line exists because a
+  tunnel going down is one of the four things that lights the bar icon, and a
+  panel you open to ask why should not need a second keystroke to answer.
+- With those two lists gone the zone panel is about a third shorter, and the
+  account screen shows every tunnel and every Worker instead of the top three
+  and a tail — the cap was only there because they were sharing a panel.
+- The zone strip no longer announces `FREE WEBSITE`. The plan is worth the
+  space when it is not the one nearly everybody is on; on a free zone it was
+  filling the slot where `PAUSED` and `READ-ONLY` need to be noticed.
+
 ## 0.8.2
 
 - A Worker that fails a little no longer looks like one that fails entirely.

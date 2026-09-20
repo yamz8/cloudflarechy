@@ -142,6 +142,27 @@ throwing outranks one that is quiet. The count in each heading is always the
 true total. Four items show all four, because `+1 more` costs the same line
 the row itself would have.
 
+### The account is a different scope, so it is a different screen
+
+Tunnels and Workers belong to the account, not to the zone in the picker —
+switching zones changes none of those rows. Sitting under the picker they read
+as though they did, so they have their own screen: press `a`, or click the
+account line at the foot of the zone panel.
+
+That line is not only a way in. A tunnel going down is one of the four things
+that turns the bar icon its alert colour, so the panel you open to ask *why*
+has to answer without a second keystroke:
+
+```
+Acme Inc                        1 tunnel down  ·  3 Workers
+```
+
+![The account screen](account.png)
+
+The account screen lists every tunnel and every Worker rather than the top
+three and a "N more" tail — it has the room, and the cap on the zone panel was
+only ever there because these sections were on it.
+
 A Worker's figures go amber the moment it throws anything and red once more
 than 5% of its invocations fail — the same line the bar icon draws for a zone's
 5xx rate. Only the error count is coloured: ten failures in two and a half
@@ -266,8 +287,9 @@ The Dashboard button is one click from all of them.
 | right-click the icon | refresh now |
 | `r` | refresh now |
 | `t` | next traffic range — 24h, 7d, 30d |
+| `a` | the account — tunnels and Workers |
 | `c` | credential screen — sign in, paste a token, or forget one |
-| `Esc` | leave the credential screen, or a Worker's detail view |
+| `Esc` | leave the account screen, a Worker's detail, or the credential screen |
 | `d` | toggle Development Mode |
 | `u` | toggle Under Attack Mode |
 | `p` | purge cache (asks first) |

@@ -98,6 +98,14 @@ Panel {
   property var workerDetail: null
   property bool workerDetailLoading: false
   readonly property bool workerDetailVisible: root.workerDetailName !== ""
+  // Tunnels and Workers belong to the account, not to the zone in the picker,
+  // and putting them under it said otherwise. They get their own screen; the
+  // zone panel keeps one line about them, because a tunnel going down is one
+  // of the things that lights the bar icon and a panel that cannot say why is
+  // not worth opening.
+  property bool accountViewOpen: false
+  readonly property bool accountViewVisible: root.accountViewOpen
+                                             && root.accountSectionVisible
 
   property var setupInfo: null
   property bool showSetup: false
@@ -221,6 +229,11 @@ Panel {
     var all = items || []
     return all.length <= root.listCap + 1 ? 0 : all.length - root.listCap
   }
+
+  // The account screen has room for all of them; the summary line on the zone
+  // panel is what the cap used to be for.
+  readonly property var rankedTunnels: root.rankedBy(root.tunnels, root.tunnelRank)
+  readonly property var rankedWorkers: root.rankedBy(root.workers, root.workerRank)
 
   readonly property var shownTunnels: root.capList(root.rankedBy(root.tunnels, root.tunnelRank))
   readonly property int hiddenTunnels: root.hiddenCount(root.tunnels)
@@ -651,6 +664,14 @@ Panel {
     }, false)
   }
 
+  function openAccountView() {
+    if (!root.accountSectionVisible) return
+    root.closeWorkerDetail()
+    root.accountViewOpen = true
+  }
+
+  function closeAccountView() { root.accountViewOpen = false }
+
   function closeWorkerDetail() {
     root.workerDetailName = ""
     root.workerDetail = null
@@ -822,6 +843,7 @@ Panel {
       root.showSetup = false
       root.setupStatus = ""
       root.closeWorkerDetail()
+      root.closeAccountView()
       // The bar dot reads its error rate from whichever window is loaded, and
       // the background poll keeps loading whatever was left selected. Leaving
       // the panel on 30 days would quietly redefine what lights the icon: a
@@ -1009,6 +1031,7 @@ Panel {
     contentHeight: panel.fittedContentHeight(
                      root.setupVisible ? setupContent.implicitHeight
                      : root.workerDetailVisible ? workerContent.implicitHeight
+                     : root.accountViewVisible ? accountContent.implicitHeight
                      : column.implicitHeight)
 
     PanelKeyCatcher {
@@ -1038,6 +1061,7 @@ Panel {
       onCloseRequested: {
         if (root.purgeConfirmOpen) root.purgeConfirmOpen = false
         else if (root.workerDetailVisible) root.closeWorkerDetail()
+        else if (root.accountViewVisible) root.closeAccountView()
         // Escape backs out of the setup screen, unless backing out would leave
         // nothing behind it.
         else if (root.showSetup && root.tokenPresent) root.closeSetup()
@@ -1057,6 +1081,13 @@ Panel {
           return
         }
         if (root.setupVisible || root.workerDetailVisible) return
+        // The account screen is a place, not a mode: `a` opens it and Escape
+        // leaves, the same way a Worker does.
+        if (key === "a") {
+          root.accountViewVisible ? root.closeAccountView() : root.openAccountView()
+          return
+        }
+        if (root.accountViewVisible) return
         if (key === "r") root.refresh(true)
         // Widening the window reads nothing it could not already read, so it
         // stays available on a read-only credential.
@@ -1434,7 +1465,12 @@ Panel {
             text: {
               if (!root.zone) return "ZONE"
               var bits = []
-              if (root.zone.plan) bits.push(String(root.zone.plan).toUpperCase())
+              // The plan only earns its place when it is not the one almost
+              // everybody is on. "ZONE · FREE WEBSITE" told a reader on the
+              // free plan nothing they did not know, while sitting where the
+              // exceptional states — paused, read-only — need to be noticed.
+              var plan = String(root.zone.plan || "")
+              if (plan !== "" && !/^free\b/i.test(plan)) bits.push(plan.toUpperCase())
               if (root.zone.status && root.zone.status !== "active")
                 bits.push(String(root.zone.status).toUpperCase())
               if (root.zone.paused) bits.push("PAUSED")
@@ -1621,277 +1657,93 @@ Panel {
             text: root.routesError + " — add Zone → Workers Routes → Read"
           }
 
-          // ---- account scope ----------------------------------------------
-          // Everything from here down belongs to the account, not to the zone
-          // in the picker.
+          // ---- what the account is doing ----------------------------------
+          // One line, and a way in. The lists themselves moved to their own
+          // screen because they do not belong to the zone in the picker, but
+          // a tunnel that is down is one of the four things that turns the bar
+          // icon its alert colour — so the panel you open to ask "why?" still
+          // answers without a second keystroke.
           PanelSeparator {
             width: parent.width
             visible: root.accountSectionVisible
             foreground: root.foreground
           }
 
-          // Recedes on purpose. This names the scope of what follows; Tunnels
-          // and Workers are the sections you came to read, so they keep full
-          // weight and this sits behind them.
-          // Not a PanelSectionHeader, though it used to be: at header weight
-          // with nothing under it before the next header, it read as a section
-          // whose contents had failed to load. It is a kicker on the rule
-          // above — everything below belongs to the account — so it is set
-          // like one.
-          Text {
+          Rectangle {
             width: parent.width
             visible: root.accountSectionVisible
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: root.foreground
-            opacity: 0.4
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: root.accountName !== "" ? "ACCOUNT  ·  " + root.accountName : "ACCOUNT"
-          }
+            height: Style.space(28)
+            radius: Style.cornerRadius / 2
+            color: accountHover.containsMouse ? Color.menu.selectedBackground : "transparent"
 
-          // ---- tunnels ----------------------------------------------------
-          PanelSectionHeader {
-            width: parent.width
-            visible: root.tunnelsSectionVisible
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            textFormat: Text.PlainText
-            text: root.troubledTunnels > 0
-                  ? "TUNNELS  ·  " + root.troubledTunnels
-                    + (root.troubledTunnels === 1 ? " NEEDS ATTENTION" : " NEED ATTENTION")
-                  : "TUNNELS  ·  " + root.tunnels.length
-          }
+            MouseArea {
+              id: accountHover
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openAccountView()
+            }
 
-          Column {
-            width: parent.width
-            visible: root.tunnelsSectionVisible && root.tunnels.length > 0
-            spacing: 0
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.rowPaddingX
+              anchors.right: accountState.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              color: root.foreground
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+              text: root.accountName !== "" ? root.accountName : "Account"
+            }
 
-            Repeater {
-              model: root.shownTunnels
+            // The trouble first and in the colour it deserves, the counts
+            // beside it in the colour a count deserves. One Text for the pair
+            // would have painted "3 Workers" red because a tunnel was down.
+            Row {
+              id: accountState
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.rowPaddingX
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 0
 
-              delegate: Rectangle {
-                required property var modelData
-                width: parent.width
-                height: Style.space(26)
-                radius: Style.cornerRadius / 2
-                color: tunnelHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+              Text {
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                color: root.troubledTunnels > 0 ? Color.urgent : root.foreground
+                opacity: root.troubledTunnels > 0 ? 1.0 : 0.5
+                textFormat: Text.PlainText
+                text: root.troubledTunnels > 0
+                      ? root.troubledTunnels
+                        + (root.troubledTunnels === 1 ? " tunnel down" : " tunnels down")
+                      : root.tunnelsSectionVisible
+                        ? root.tunnels.length
+                          + (root.tunnels.length === 1 ? " tunnel" : " tunnels")
+                        : ""
+              }
 
-                MouseArea {
-                  id: tunnelHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openTunnelsDashboard()
-                }
+              Text {
+                visible: root.workersSectionVisible && root.tunnelsSectionVisible
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                color: root.foreground
+                opacity: 0.5
+                textFormat: Text.PlainText
+                text: "  ·  "
+              }
 
-                Rectangle {
-                  id: statusDot
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(6)
-                  height: width
-                  radius: width / 2
-                  color: root.tunnelColor(String(parent.modelData.status || ""))
-                }
-
-                Text {
-                  anchors.left: statusDot.right
-                  anchors.leftMargin: Style.spacing.sm
-                  anchors.right: tunnelMeta.left
-                  anchors.rightMargin: Style.spacing.sm
-                  anchors.verticalCenter: parent.verticalCenter
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  color: root.foreground
-                  elide: Text.ElideRight
-                  textFormat: Text.PlainText
-                  text: parent.modelData.name || parent.modelData.id || ""
-                }
-
-                Text {
-                  id: tunnelMeta
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: root.foreground
-                  opacity: 0.55
-                  textFormat: Text.PlainText
-                  // Connection count is what separates "healthy" from
-                  // "healthy, on one leg".
-                  text: {
-                    var t = parent.modelData
-                    var n = Number(t.connections || 0)
-                    return String(t.status || "") + (n > 0 ? "  ·  " + n + " conn" : "")
-                  }
-                }
+              Text {
+                visible: root.workersSectionVisible
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                color: root.foreground
+                opacity: 0.5
+                textFormat: Text.PlainText
+                text: root.workers.length
+                      + (root.workers.length === 1 ? " Worker" : " Workers")
               }
             }
-
-            MoreRow {
-              count: root.hiddenTunnels
-              destination: "Zero Trust"
-              onActivated: root.openTunnelsDashboard()
-            }
-          }
-
-          Text {
-            width: parent.width
-            visible: root.showTunnels && root.tunnelsError !== ""
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: root.foreground
-            opacity: 0.55
-            wrapMode: Text.WordWrap
-            textFormat: Text.PlainText
-            text: root.tunnelsError
-          }
-
-          // ---- workers ----------------------------------------------------
-          PanelSeparator {
-            width: parent.width
-            visible: root.workersSectionVisible && root.tunnelsSectionVisible
-            foreground: root.foreground
-          }
-
-          PanelSectionHeader {
-            width: parent.width
-            visible: root.workersSectionVisible
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            textFormat: Text.PlainText
-            text: "WORKERS  ·  " + root.workers.length
-          }
-
-          Column {
-            width: parent.width
-            visible: root.workersSectionVisible
-            spacing: 0
-
-            Repeater {
-              // Newest deploys first, capped: this is a "what did I ship
-              // lately" list, not a directory.
-              model: root.shownWorkers
-
-              delegate: Rectangle {
-                required property var modelData
-                width: parent.width
-                height: Style.space(24)
-                radius: Style.cornerRadius / 2
-                color: workerHover.containsMouse ? Color.menu.selectedBackground : "transparent"
-
-                MouseArea {
-                  id: workerHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openWorkerDetail(parent.modelData.name)
-                }
-
-                Text {
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.spacing.rowPaddingX
-                  anchors.right: workerMeta.left
-                  anchors.rightMargin: Style.spacing.sm
-                  anchors.verticalCenter: parent.verticalCenter
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  color: root.foreground
-                  elide: Text.ElideRight
-                  textFormat: Text.PlainText
-                  text: parent.modelData.name || ""
-                }
-
-                // Split rather than one string, because only one of these
-                // figures is ever the bad news. A single coloured line made a
-                // Worker's request count and its CPU time look like symptoms.
-                Row {
-                  id: workerMeta
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: 0
-
-                  readonly property var w: parent.modelData
-                  // A Worker with no invocations in the window has no metrics
-                  // row at all, which is not the same as one that ran zero
-                  // times and reported it — so that case falls back to saying
-                  // when it was last deployed.
-                  readonly property bool idle: !w || w.requests === undefined
-                                               || w.requests === null
-                  readonly property real errs: Number(w && w.errors || 0)
-                  readonly property string cpu: root.cpuTime(w && w.cpu_p50_us)
-
-                  Text {
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: root.foreground
-                    opacity: 0.5
-                    textFormat: Text.PlainText
-                    text: workerMeta.idle
-                          ? root.ago(workerMeta.w && workerMeta.w.modified_on)
-                          : root.compact(workerMeta.w.requests) + " req"
-                  }
-
-                  Text {
-                    visible: !workerMeta.idle && workerMeta.errs > 0
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: root.foreground
-                    opacity: 0.5
-                    textFormat: Text.PlainText
-                    text: "  ·  "
-                  }
-
-                  Text {
-                    visible: !workerMeta.idle && workerMeta.errs > 0
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    // Urgent above the threshold, the brand amber below it: a
-                    // handful of failures is worth seeing and not worth
-                    // shouting, and amber is already what the panel uses for a
-                    // number that wants a second look.
-                    color: root.workerAlarming(workerMeta.w) ? Color.urgent : root.brand
-                    opacity: 1.0
-                    textFormat: Text.PlainText
-                    text: root.compact(workerMeta.errs) + " err"
-                  }
-
-                  Text {
-                    visible: !workerMeta.idle && workerMeta.cpu !== ""
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: root.foreground
-                    opacity: 0.5
-                    textFormat: Text.PlainText
-                    text: "  ·  " + workerMeta.cpu
-                  }
-                }
-              }
-            }
-
-            MoreRow {
-              count: root.hiddenWorkers
-              destination: "Dashboard"
-              onActivated: root.openWorkersDashboard()
-            }
-          }
-
-          Text {
-            width: parent.width
-            visible: root.showWorkers && root.workersMetricsError !== ""
-                     && root.workers.length > 0
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: root.foreground
-            opacity: 0.5
-            wrapMode: Text.WordWrap
-            textFormat: Text.PlainText
-            text: "Showing deploy dates — Workers traffic needs Account → Account Analytics → Read."
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
@@ -2193,6 +2045,314 @@ Panel {
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
             text: setupView.envVar + " is set in the environment and takes precedence over anything saved here."
+          }
+        }
+      }
+
+      // ---- the account --------------------------------------------------
+      // Tunnels and Workers, at the scope they actually have. The zone picker
+      // is not on this screen because nothing here answers to it: switching
+      // zones changes none of these rows, which is exactly what made them
+      // confusing sitting underneath it.
+      Rectangle {
+        id: accountView
+        anchors.fill: parent
+        z: 13
+        visible: root.accountViewVisible
+        color: Color.popups.background
+
+        MouseArea { anchors.fill: parent; hoverEnabled: true }
+
+        Flickable {
+          id: accountFlick
+          anchors.fill: parent
+          contentWidth: width
+          contentHeight: accountContent.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Column {
+            id: accountContent
+            width: accountFlick.width
+            spacing: Style.space(10)
+
+            Item {
+              width: parent.width
+              height: Math.max(accountBack.height, accountTitle.implicitHeight,
+                               accountOpen.height)
+
+              PanelActionButton {
+                id: accountBack
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰁍"
+                tooltipText: "Back (Esc)"
+                foreground: root.foreground
+                onClicked: root.closeAccountView()
+              }
+
+              Text {
+                id: accountTitle
+                anchors.left: accountBack.right
+                anchors.leftMargin: Style.spacing.sm
+                anchors.right: accountOpen.left
+                anchors.rightMargin: Style.spacing.sm
+                anchors.verticalCenter: parent.verticalCenter
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                color: root.foreground
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                text: root.accountName !== "" ? root.accountName : "Account"
+              }
+
+              Button {
+                id: accountOpen
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Dashboard"
+                tooltipText: "This account on the dashboard"
+                foreground: root.foreground
+                onClicked: root.openWorkersDashboard()
+              }
+            }
+
+          // ---- tunnels ----------------------------------------------------
+          PanelSectionHeader {
+            width: parent.width
+            visible: root.tunnelsSectionVisible
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: root.troubledTunnels > 0
+                  ? "TUNNELS  ·  " + root.troubledTunnels
+                    + (root.troubledTunnels === 1 ? " NEEDS ATTENTION" : " NEED ATTENTION")
+                  : "TUNNELS  ·  " + root.tunnels.length
+          }
+
+          Column {
+            width: parent.width
+            visible: root.tunnelsSectionVisible && root.tunnels.length > 0
+            spacing: 0
+
+            Repeater {
+              model: root.rankedTunnels
+
+              delegate: Rectangle {
+                required property var modelData
+                width: parent.width
+                height: Style.space(26)
+                radius: Style.cornerRadius / 2
+                color: tunnelHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+
+                MouseArea {
+                  id: tunnelHover
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.openTunnelsDashboard()
+                }
+
+                Rectangle {
+                  id: statusDot
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(6)
+                  height: width
+                  radius: width / 2
+                  color: root.tunnelColor(String(parent.modelData.status || ""))
+                }
+
+                Text {
+                  anchors.left: statusDot.right
+                  anchors.leftMargin: Style.spacing.sm
+                  anchors.right: tunnelMeta.left
+                  anchors.rightMargin: Style.spacing.sm
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  color: root.foreground
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  text: parent.modelData.name || parent.modelData.id || ""
+                }
+
+                Text {
+                  id: tunnelMeta
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  opacity: 0.55
+                  textFormat: Text.PlainText
+                  // Connection count is what separates "healthy" from
+                  // "healthy, on one leg".
+                  text: {
+                    var t = parent.modelData
+                    var n = Number(t.connections || 0)
+                    return String(t.status || "") + (n > 0 ? "  ·  " + n + " conn" : "")
+                  }
+                }
+              }
+            }
+
+          }
+
+          Text {
+            width: parent.width
+            visible: root.showTunnels && root.tunnelsError !== ""
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.55
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: root.tunnelsError
+          }
+
+          // ---- workers ----------------------------------------------------
+          PanelSeparator {
+            width: parent.width
+            visible: root.workersSectionVisible && root.tunnelsSectionVisible
+            foreground: root.foreground
+          }
+
+          PanelSectionHeader {
+            width: parent.width
+            visible: root.workersSectionVisible
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            textFormat: Text.PlainText
+            text: "WORKERS  ·  " + root.workers.length
+          }
+
+          Column {
+            width: parent.width
+            visible: root.workersSectionVisible
+            spacing: 0
+
+            Repeater {
+              // Newest deploys first, capped: this is a "what did I ship
+              // lately" list, not a directory.
+              model: root.rankedWorkers
+
+              delegate: Rectangle {
+                required property var modelData
+                width: parent.width
+                height: Style.space(24)
+                radius: Style.cornerRadius / 2
+                color: workerHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+
+                MouseArea {
+                  id: workerHover
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.openWorkerDetail(parent.modelData.name)
+                }
+
+                Text {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.right: workerMeta.left
+                  anchors.rightMargin: Style.spacing.sm
+                  anchors.verticalCenter: parent.verticalCenter
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  color: root.foreground
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  text: parent.modelData.name || ""
+                }
+
+                // Split rather than one string, because only one of these
+                // figures is ever the bad news. A single coloured line made a
+                // Worker's request count and its CPU time look like symptoms.
+                Row {
+                  id: workerMeta
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: 0
+
+                  readonly property var w: parent.modelData
+                  // A Worker with no invocations in the window has no metrics
+                  // row at all, which is not the same as one that ran zero
+                  // times and reported it — so that case falls back to saying
+                  // when it was last deployed.
+                  readonly property bool idle: !w || w.requests === undefined
+                                               || w.requests === null
+                  readonly property real errs: Number(w && w.errors || 0)
+                  readonly property string cpu: root.cpuTime(w && w.cpu_p50_us)
+
+                  Text {
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: workerMeta.idle
+                          ? root.ago(workerMeta.w && workerMeta.w.modified_on)
+                          : root.compact(workerMeta.w.requests) + " req"
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: "  ·  "
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    // Urgent above the threshold, the brand amber below it: a
+                    // handful of failures is worth seeing and not worth
+                    // shouting, and amber is already what the panel uses for a
+                    // number that wants a second look.
+                    color: root.workerAlarming(workerMeta.w) ? Color.urgent : root.brand
+                    opacity: 1.0
+                    textFormat: Text.PlainText
+                    text: root.compact(workerMeta.errs) + " err"
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.cpu !== ""
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: "  ·  " + workerMeta.cpu
+                  }
+                }
+              }
+            }
+
+          }
+
+          Text {
+            width: parent.width
+            visible: root.showWorkers && root.workersMetricsError !== ""
+                     && root.workers.length > 0
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.5
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Showing deploy dates — Workers traffic needs Account → Account Analytics → Read."
+          }
           }
         }
       }

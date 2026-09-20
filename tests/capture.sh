@@ -134,10 +134,12 @@ capture() {
 
 open_panel() { omarchy-shell cloudflarechy open >/dev/null 2>&1; }
 open_credentials() { open_panel; sleep 3; wtype -k c; }
+open_account() { open_panel; sleep 3; wtype -k a; }
 open_worker() { omarchy-shell cloudflarechy worker api-router >/dev/null 2>&1; }
 
 echo "capturing"
 capture preview.png open_panel
+capture account.png open_account
 capture connect.png open_credentials
 capture worker.png  open_worker
 
