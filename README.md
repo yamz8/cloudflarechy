@@ -324,7 +324,7 @@ omarchy-shell cloudflarechy toggle
 ./tests/run.sh
 ```
 
-88 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
+140 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
 a stand-in shaped like the real API. They pin the things that are easy to break
 without noticing: the write guard, the security-level save *and* its fallback,
 the analytics query giving up one optional field at a time, 4xx never being
@@ -340,6 +340,21 @@ Two honest limits. A fixture cannot tell you Cloudflare still answers this way
 — only that the plugin still does; every field in the mock was checked against
 a live account once, and that is the whole of its authority. And the suite
 covers the script, not the QML: the panel is still verified by looking at it.
+
+## Screenshots
+
+```bash
+./tests/capture.sh
+```
+
+Regenerates the three images above against the mock, so the README shows the
+panel as it is rather than as it was several releases ago. It stands up
+`tests/mock-api.py`, points the plugin at it, takes the pictures on an empty
+workspace, and puts everything back — your token is moved aside and returned,
+and the request path goes back to Cloudflare whether or not the run succeeds.
+
+The panel in these images is always `example.com` and Acme Inc. No screenshot
+in this repo should ever contain a real account.
 
 The assertions were checked by breaking the code on purpose and confirming they
 went red. That found a real gap the first time — the security-level fallback
