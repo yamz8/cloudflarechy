@@ -14,6 +14,7 @@ failure the plugin has a retry path for and a fixture that never fails it
 would never exercise it.
 """
 import json
+import os
 import re
 import sys
 import datetime
@@ -36,6 +37,13 @@ ZONE_QUIET = "d" * 32
 ACCOUNT_NO_METRICS = "1" * 32
 
 STATE = {"security_level": "high", "development_mode": 0, "purges": 0}
+
+# The fixture keeps a tunnel down, because a panel with nothing wrong on it
+# exercises none of the code that says so. That makes the bar icon alert from
+# the first frame, which is no use to a recording whose whole point is showing
+# the icon change when a switch goes on — so the demo asks for a calm account
+# and gets one. Nothing in the test suite sets this.
+CALM = os.environ.get("CLOUDFLARECHY_MOCK_CALM") == "1"
 
 
 def ok(result):
@@ -211,8 +219,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(ok([
                 {"id": "t1", "name": "homelab", "status": "healthy",
                  "connections": [{}, {}], "created_at": "2026-01-02T03:04:05Z"},
-                {"id": "t2", "name": "staging", "status": "down",
-                 "connections": [], "created_at": "2026-02-02T03:04:05Z"},
+                {"id": "t2", "name": "staging",
+                 "status": "healthy" if CALM else "down",
+                 "connections": [{}] if CALM else [],
+                 "created_at": "2026-02-02T03:04:05Z"},
             ]))
         if path in (f"/accounts/{ACCOUNT}/workers/scripts",
                     f"/accounts/{ACCOUNT_NO_METRICS}/workers/scripts"):

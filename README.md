@@ -378,10 +378,11 @@ Two honest limits. A fixture cannot tell you Cloudflare still answers this way
 a live account once, and that is the whole of its authority. And the suite
 covers the script, not the QML: the panel is still verified by looking at it.
 
-## Screenshots
+## Screenshots and the demo
 
 ```bash
-./tests/capture.sh
+./tests/capture.sh     # the four images above
+./tests/demo.sh        # a ~48s recording, demo.mp4
 ```
 
 Regenerates the three images above against the mock, so the README shows the
@@ -392,6 +393,18 @@ and the request path goes back to Cloudflare whether or not the run succeeds.
 
 The panel in these images is always `example.com` and Acme Inc. No screenshot
 in this repo should ever contain a real account.
+
+`demo.sh` records the same way and for the same reason: against the mock, so
+the write beats — Development Mode, the purge prompt — can be shown without
+touching a live site, and so nothing anyone's Cloudflare holds ends up in a
+video on the internet. It asks the mock for a calm account first
+(`CLOUDFLARECHY_MOCK_CALM`), because the fixture normally keeps a tunnel down
+and the bar icon would then be alerting before the recording starts — which
+is no use when the point is watching it light up.
+
+Every beat is a keystroke, so nothing depends on where the mouse is. The
+recording is gitignored: it is a megabyte that changes wholesale on each take,
+and the script that makes it is the part worth keeping.
 
 The assertions were checked by breaking the code on purpose and confirming they
 went red. That found a real gap the first time — the security-level fallback

@@ -3,3 +3,7 @@
 
 # Claude Code's per-machine plugin toggles, not part of this plugin.
 .claude/settings.local.json
+
+# The recording tests/demo.sh makes. Reproducible from the script, and a
+# megabyte of binary that changes wholesale on every take.
+demo.mp4

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.2
+
+- `tests/demo.sh` records a demo of the panel against the mock: the zone, the
+  three windows, a Worker in full, the account screen, the purge prompt asking
+  first, and Development Mode going on and off. Every beat is a keystroke, so
+  none of it depends on where the mouse is — which is just as well, because a
+  warped cursor dismisses the panel.
+- The mock can be asked for a calm account. The fixture keeps a tunnel down on
+  purpose, which means the bar icon alerts from the first frame and the one
+  thing a bar widget most needs to demonstrate — the icon lighting up when a
+  switch goes on — cannot be filmed. `CLOUDFLARECHY_MOCK_CALM=1` makes the
+  account healthy; nothing in the test suite sets it.
+
 ## 0.9.1
 
 - Routes became **Workers on this zone**, and carry the Worker's figures. The
