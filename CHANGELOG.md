@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.1
+
+- Routes became **Workers on this zone**, and carry the Worker's figures. The
+  account-wide list moving to its own screen took Workers off the first thing
+  you see, which was a loss — but the fix was not to put an account-scoped list
+  back under a zone picker. The scripts answering for *this domain* are the one
+  Workers question that is genuinely zone-scoped, and they were already on the
+  panel; they just never said how they were doing. Each row is now the script
+  and its health on one line with the pattern beneath, because three columns on
+  one row elided the name and the path and left the figures nowhere to go.
+- The zone strip carries no heading unless it has news. `ZONE` over three
+  buttons was a scope word labelling content that is not a zone — the same
+  thing that made the account header read as a section with nothing in it — and
+  once the plan stopped showing on free zones it was a bare word carrying no
+  information at all. It returns for `PAUSED`, `READ-ONLY` and a paid plan. The
+  buttons name themselves.
+
 ## 0.9.0
 
 - The account line says it goes somewhere. Every other row that opens something

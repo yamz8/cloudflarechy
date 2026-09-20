@@ -157,6 +157,26 @@ Panel {
   readonly property bool accountSectionVisible: root.tunnelsSectionVisible
     || root.workersSectionVisible
 
+  // What the zone strip has to say, if anything. "ZONE" over three buttons is
+  // a scope word labelling content that is not a zone — the same thing that
+  // made the account header read as a section with nothing in it — and once
+  // the plan stopped showing on free zones it was a bare word carrying no
+  // information at all. It appears when it has news and not otherwise; the
+  // buttons name themselves.
+  readonly property var zoneNotes: {
+    if (!root.zone) return []
+    var bits = []
+    // A plan only earns the space when it is not the one almost everybody is
+    // on, and this is where PAUSED and READ-ONLY need to be noticed.
+    var plan = String(root.zone.plan || "")
+    if (plan !== "" && !/^free\b/i.test(plan)) bits.push(plan.toUpperCase())
+    if (root.zone.status && root.zone.status !== "active")
+      bits.push(String(root.zone.status).toUpperCase())
+    if (root.zone.paused) bits.push("PAUSED")
+    if (root.readOnly) bits.push("READ-ONLY")
+    return bits
+  }
+
   // How many rows a list section will show before it starts summarising. Only
   // Routes caps now — tunnels and Workers moved to the account screen, which
   // has the room to list all of them — but a zone fronted by thirty routes
@@ -195,8 +215,23 @@ Panel {
     return 0
   }
 
+  // The account-wide Workers list is where the figures live; a route only
+  // names the script. Matched here so the zone panel can say how the Workers
+  // serving this domain are actually doing.
+  function workerByName(name) {
+    var wanted = String(name || "")
+    if (wanted === "") return null
+    for (var i = 0; i < root.workers.length; i++)
+      if (String(root.workers[i].name || "") === wanted) return root.workers[i]
+    return null
+  }
+
+  // A route that is failing outranks one that is merely running, which
+  // outranks a pattern with nothing behind it.
   function routeRank(r) {
-    return r && String(r.script || "") !== "" ? 1 : 0
+    if (!r || String(r.script || "") === "") return 0
+    var w = root.workerByName(r.script)
+    return w && Number(w.errors || 0) > 0 ? 2 : 1
   }
 
   // Decorated with the original position so equal ranks keep the order the API
@@ -1453,25 +1488,11 @@ Panel {
           // ---- the two switches, and the blunt instrument ------------------
           PanelSectionHeader {
             width: parent.width
-            visible: root.zone !== null
+            visible: root.zone !== null && root.zoneNotes.length > 0
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
-            text: {
-              if (!root.zone) return "ZONE"
-              var bits = []
-              // The plan only earns its place when it is not the one almost
-              // everybody is on. "ZONE · FREE WEBSITE" told a reader on the
-              // free plan nothing they did not know, while sitting where the
-              // exceptional states — paused, read-only — need to be noticed.
-              var plan = String(root.zone.plan || "")
-              if (plan !== "" && !/^free\b/i.test(plan)) bits.push(plan.toUpperCase())
-              if (root.zone.status && root.zone.status !== "active")
-                bits.push(String(root.zone.status).toUpperCase())
-              if (root.zone.paused) bits.push("PAUSED")
-              if (root.readOnly) bits.push("READ-ONLY")
-              return bits.length > 0 ? "ZONE  ·  " + bits.join("  ·  ") : "ZONE"
-            }
+            text: "ZONE  ·  " + root.zoneNotes.join("  ·  ")
           }
 
           Row {
@@ -1553,8 +1574,13 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             textFormat: Text.PlainText
-            text: root.routesError !== "" ? "ROUTES"
-                                          : "ROUTES  ·  " + root.routes.length
+            // Named for the Workers rather than the routes. These are the
+            // scripts answering for the zone in the picker — the one Workers
+            // question that is genuinely zone-scoped, and the reason the
+            // account-wide list could move to its own screen without taking
+            // Workers off the first thing you see.
+            text: root.routesError !== "" ? "WORKERS ON THIS ZONE"
+                                          : "WORKERS ON THIS ZONE  ·  " + root.routes.length
           }
 
           Column {
@@ -1571,9 +1597,15 @@ Panel {
                 // A route can exist with nothing behind it. Saying so is more
                 // use than a row that looks clickable and answers nothing.
                 readonly property bool runnable: script !== "" && root.accountId !== ""
+                readonly property var worker: root.workerByName(script)
+                readonly property real errs: Number(worker && worker.errors || 0)
 
                 width: parent.width
-                height: Style.space(26)
+                // Two lines: the script and how it is doing on one, the
+                // pattern under it. Three columns on a single row meant the
+                // name and the path both elided and the figures had nowhere
+                // to go at all.
+                height: Style.space(40)
                 radius: Style.cornerRadius / 2
                 color: routeHover.containsMouse && runnable
                        ? Color.menu.selectedBackground : "transparent"
@@ -1586,18 +1618,14 @@ Panel {
                   onClicked: if (parent.runnable) root.openWorkerDetail(parent.script)
                 }
 
-                // The script name takes the room it needs before the pattern
-                // gets any. It is the identifier on this row — the thing you
-                // click and the thing the Worker sections call it — and when
-                // the two shared the width evenly both ended up elided, so a
-                // row read `edge-personalisati…  …y-long-path-segment/deeper-1/*`
-                // and named nothing at all.
                 Text {
                   id: routeScript
                   anchors.left: parent.left
                   anchors.leftMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Math.min(implicitWidth, parent.width * 0.62)
+                  anchors.right: routeMeta.left
+                  anchors.rightMargin: Style.spacing.sm
+                  anchors.top: parent.top
+                  anchors.topMargin: Style.space(4)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   color: root.foreground
@@ -1607,23 +1635,67 @@ Panel {
                   text: parent.runnable ? parent.script : "no Worker"
                 }
 
-                // Elided in the middle rather than from the left. A pattern
-                // has two informative ends — the host says which site, the
-                // tail says which route — and cutting from the left threw the
-                // host away to save a path segment nobody reads.
-                Text {
-                  id: routePattern
-                  anchors.left: routeScript.right
-                  anchors.leftMargin: Style.spacing.sm
+                // The same figures and the same colour rule the account
+                // screen uses, so a Worker reads the same wherever you meet
+                // it. A route with no Worker has nothing to report.
+                Row {
+                  id: routeMeta
                   anchors.right: parent.right
                   anchors.rightMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.verticalCenter: routeScript.verticalCenter
+                  spacing: 0
+                  visible: parent.worker !== null
+
+                  Text {
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: {
+                      var w = routeMeta.parent.worker
+                      if (!w) return ""
+                      if (w.requests === undefined || w.requests === null)
+                        return root.ago(w.modified_on)
+                      return root.compact(w.requests) + " req"
+                    }
+                  }
+
+                  Text {
+                    visible: routeMeta.parent.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: "  ·  "
+                  }
+
+                  Text {
+                    visible: routeMeta.parent.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.workerAlarming(routeMeta.parent.worker)
+                           ? Color.urgent : root.brand
+                    textFormat: Text.PlainText
+                    text: root.compact(routeMeta.parent.errs) + " err"
+                  }
+                }
+
+                // Elided in the middle: a pattern has two informative ends —
+                // the host says which site, the tail says which route.
+                Text {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.top: routeScript.bottom
+                  anchors.topMargin: Style.space(2)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.foreground
-                  opacity: 0.55
+                  opacity: 0.45
                   elide: Text.ElideMiddle
-                  horizontalAlignment: Text.AlignRight
                   textFormat: Text.PlainText
                   text: String(parent.modelData.pattern || "")
                 }

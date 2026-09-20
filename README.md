@@ -168,13 +168,22 @@ than 5% of its invocations fail — the same line the bar icon draws for a zone'
 5xx rate. Only the error count is coloured: ten failures in two and a half
 thousand is worth seeing and is not the same news as twelve out of twelve.
 
-**Routes** — which Workers answer for this domain, and on what pattern. This is
-zone-scoped: it changes with the zone picker, unlike the Workers list below the
-account break, which is every script in the account. The same Worker can appear
-in both, for different reasons. Click one to open its detail view; a route with
-no Worker behind it says so and stays inert. Without the scope the section
-names the refusal instead of vanishing — a zone with no routes and a token that
-may not look are opposite problems and should not read alike.
+**Workers on this zone** — the scripts answering for the domain in the picker,
+each with how it is doing and the pattern it serves. This is the one Workers
+question that is genuinely zone-scoped: it changes when you change zones,
+unlike the account's full list, which is every script you have and lives on the
+account screen. The same Worker appears in both for different reasons.
+
+Click one to open its detail. A route with no Worker behind it says so and
+stays inert. Without the scope the section names the refusal instead of
+vanishing — a zone with no routes and a token that may not look are opposite
+problems and should not read alike.
+
+The switches above it carry no heading unless the zone has something to say.
+`ZONE` over three buttons was a scope word labelling content that is not a
+zone, and once the plan stopped showing on free zones it was a bare word
+carrying nothing. It comes back as `ZONE · PAUSED`, `ZONE · READ-ONLY` or the
+plan when the zone is not on the free one.
 
 **Traffic** — requests, share served from cache, bytes served, each with how it
 compares to the window before it; then one bar per bucket. Each bar is that
