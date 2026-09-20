@@ -40,6 +40,11 @@ Item {
   property color foreground: Color.foreground
   property color accent: "#f6821f"
   property real barSpacing: Style.spacing.xxs
+  // How present the unfilled part of a bar is. On the zone graph the fill
+  // covers most of it and a ghost of a track is right; on a Worker's graph the
+  // fill is the error share, which on a healthy script is nothing at all, so
+  // the track *is* the chart and a ghost reads as a disabled control.
+  property real trackOpacity: 0.22
 
   // Which bucket the pointer is over, or -1. The chart deliberately does not
   // draw the figure itself: at this width a floating label would cover the
@@ -110,8 +115,9 @@ Item {
           // The hovered bar lifts out of the row. Without it the line below
           // names an hour the eye cannot find again among twenty-three
           // identical neighbours.
-          readonly property real shade: root.hoveredIndex === bucket.index ? 0.42
-                                        : parent.ratio > 0 ? 0.22 : 0.10
+          readonly property real shade: root.hoveredIndex === bucket.index
+                                        ? root.trackOpacity + 0.2
+                                        : parent.ratio > 0 ? root.trackOpacity : 0.10
           color: Qt.rgba(root.foreground.r, root.foreground.g,
                          root.foreground.b, shade)
 

@@ -142,6 +142,11 @@ throwing outranks one that is quiet. The count in each heading is always the
 true total. Four items show all four, because `+1 more` costs the same line
 the row itself would have.
 
+A Worker's figures go amber the moment it throws anything and red once more
+than 5% of its invocations fail — the same line the bar icon draws for a zone's
+5xx rate. Only the error count is coloured: ten failures in two and a half
+thousand is worth seeing and is not the same news as twelve out of twelve.
+
 **Routes** — which Workers answer for this domain, and on what pattern. This is
 zone-scoped: it changes with the zone picker, unlike the Workers list below the
 account break, which is every script in the account. The same Worker can appear
@@ -233,8 +238,9 @@ zero times, so it falls back to saying when it was last deployed.
 
 ![One Worker in detail](worker.png)
 
-Requests, success rate, p50 and p99 CPU, subrequests, its own 24h graph with
-errors filled in, and the invocation-status breakdown — which is where a
+Requests, success rate and p50 CPU across the top, with p99 and subrequests on
+the line under them, its own 24h graph with errors filled in, and the
+invocation-status breakdown — which is where a
 failure actually gets explained, since `scriptThrewException` and
 `clientDisconnected` mean very different things and the dashboard buries both.
 Each status keeps its own quantiles rather than inheriting the headline pair.

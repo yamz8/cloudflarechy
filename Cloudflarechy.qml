@@ -168,6 +168,20 @@ Panel {
     return 0
   }
 
+  // A Worker throwing ten exceptions in two and a half thousand invocations is
+  // not the same as one that fails every time, and painting both the same red
+  // spends the loudest thing on the panel on a rounding error. The line is the
+  // one the bar icon already uses for a zone's 5xx rate, so the panel alarms
+  // about Workers and zones at the same place. Invocations that all failed are
+  // alarming whatever the count.
+  function workerAlarming(w) {
+    if (!w) return false
+    var errs = Number(w.errors || 0)
+    if (errs <= 0) return false
+    var reqs = Number(w.requests || 0)
+    return reqs <= 0 ? true : (errs / reqs) >= root.errorThreshold
+  }
+
   function workerRank(w) {
     if (!w) return -1
     if (Number(w.errors || 0) > 0) return 2
@@ -932,16 +946,30 @@ Panel {
           }
         }
 
+        // The dot is the shape cue, so it has to read as a separate shape.
+        // Drawn in the alert colour on a mark already in the alert colour it
+        // merged into the cloud's own silhouette and became a bump on the
+        // corner — the redundant encoding for anyone who cannot see the colour
+        // change, doing nothing for exactly the people it is there for. The
+        // gap in the bar's own background is what separates them.
         Rectangle {
           visible: root.attentionDot && root.attention
-          width: Style.space(5)
+          width: Style.space(7)
           height: width
           radius: width / 2
-          color: root.barAttention
+          color: root.bar && !root.bar.transparent ? root.bar.background : "transparent"
           anchors.right: parent.right
           anchors.top: parent.top
-          anchors.rightMargin: -Style.space(1)
-          anchors.topMargin: -Style.space(1)
+          anchors.rightMargin: -Style.space(2)
+          anchors.topMargin: -Style.space(2)
+
+          Rectangle {
+            anchors.centerIn: parent
+            width: Style.space(5)
+            height: width
+            radius: width / 2
+            color: root.barAttention
+          }
         }
       }
     }
@@ -1573,7 +1601,7 @@ Panel {
 
             MoreRow {
               count: root.hiddenRoutes
-              destination: "dashboard"
+              destination: "Dashboard"
               onActivated: root.openDashboard()
             }
           }
@@ -1605,12 +1633,19 @@ Panel {
           // Recedes on purpose. This names the scope of what follows; Tunnels
           // and Workers are the sections you came to read, so they keep full
           // weight and this sits behind them.
-          PanelSectionHeader {
+          // Not a PanelSectionHeader, though it used to be: at header weight
+          // with nothing under it before the next header, it read as a section
+          // whose contents had failed to load. It is a kicker on the rule
+          // above — everything below belongs to the account — so it is set
+          // like one.
+          Text {
             width: parent.width
             visible: root.accountSectionVisible
-            opacity: 0.7
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.4
+            elide: Text.ElideRight
             textFormat: Text.PlainText
             text: root.accountName !== "" ? "ACCOUNT  ·  " + root.accountName : "ACCOUNT"
           }
@@ -1771,30 +1806,69 @@ Panel {
                   text: parent.modelData.name || ""
                 }
 
-                Text {
+                // Split rather than one string, because only one of these
+                // figures is ever the bad news. A single coloured line made a
+                // Worker's request count and its CPU time look like symptoms.
+                Row {
                   id: workerMeta
                   anchors.right: parent.right
                   anchors.rightMargin: Style.spacing.rowPaddingX
                   anchors.verticalCenter: parent.verticalCenter
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Number(parent.modelData.errors || 0) > 0
-                         ? Color.urgent : root.foreground
-                  opacity: Number(parent.modelData.errors || 0) > 0 ? 1.0 : 0.5
-                  textFormat: Text.PlainText
+                  spacing: 0
+
+                  readonly property var w: parent.modelData
                   // A Worker with no invocations in the window has no metrics
                   // row at all, which is not the same as one that ran zero
                   // times and reported it — so that case falls back to saying
                   // when it was last deployed.
-                  text: {
-                    var w = parent.modelData
-                    if (w.requests === undefined || w.requests === null)
-                      return root.ago(w.modified_on)
-                    var bits = [root.compact(w.requests) + " req"]
-                    if (Number(w.errors) > 0) bits.push(root.compact(w.errors) + " err")
-                    var cpu = root.cpuTime(w.cpu_p50_us)
-                    if (cpu !== "") bits.push(cpu)
-                    return bits.join("  ·  ")
+                  readonly property bool idle: !w || w.requests === undefined
+                                               || w.requests === null
+                  readonly property real errs: Number(w && w.errors || 0)
+                  readonly property string cpu: root.cpuTime(w && w.cpu_p50_us)
+
+                  Text {
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: workerMeta.idle
+                          ? root.ago(workerMeta.w && workerMeta.w.modified_on)
+                          : root.compact(workerMeta.w.requests) + " req"
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: "  ·  "
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.errs > 0
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    // Urgent above the threshold, the brand amber below it: a
+                    // handful of failures is worth seeing and not worth
+                    // shouting, and amber is already what the panel uses for a
+                    // number that wants a second look.
+                    color: root.workerAlarming(workerMeta.w) ? Color.urgent : root.brand
+                    opacity: 1.0
+                    textFormat: Text.PlainText
+                    text: root.compact(workerMeta.errs) + " err"
+                  }
+
+                  Text {
+                    visible: !workerMeta.idle && workerMeta.cpu !== ""
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.5
+                    textFormat: Text.PlainText
+                    text: "  ·  " + workerMeta.cpu
                   }
                 }
               }
@@ -1802,7 +1876,7 @@ Panel {
 
             MoreRow {
               count: root.hiddenWorkers
-              destination: "dashboard"
+              destination: "Dashboard"
               onActivated: root.openWorkersDashboard()
             }
           }
@@ -1834,7 +1908,11 @@ Panel {
             textFormat: Text.PlainText
             text: {
               var bits = []
-              if (root.accountName !== "") bits.push(root.accountName)
+              // Only when nothing above has said it. With the account sections
+              // on screen the kicker above already names the account, and the
+              // footer was repeating it two sections later.
+              if (root.accountName !== "" && !root.accountSectionVisible)
+                bits.push(root.accountName)
               if (root.tokenLabel !== "") bits.push(root.tokenLabel)
               if (root.tokenMessage !== "") bits.push(root.tokenMessage)
               if (root.updatedAt) bits.push("updated " + Qt.formatDateTime(root.updatedAt, "HH:mm"))
@@ -2205,45 +2283,58 @@ Panel {
                 : "LAST 24 HOURS"
           }
 
+          // Three, not five. The zone view was cut to three for legibility and
+          // this one kept cramming five across the same width, which left
+          // `p50 cpu` and `p99 cpu` set in a size that had to be leaned into.
+          // The two that lost their pedestal are the two nobody opens the
+          // panel to read; they are still here, on the line below.
           Row {
             width: parent.width
             visible: workerView.summary !== null
             spacing: Style.spacing.sm
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               value: workerView.summary ? root.compact(workerView.summary.requests) : "—"
               label: "requests"
             }
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               // 0% against no invocations would read as total failure. There
               // is no success rate for a Worker nothing asked for.
               value: workerView.summary && !workerView.idle
                      ? root.percentExact(workerView.summary.success_ratio) : "—"
               label: "success"
+              // The same line the Workers list draws, so a script that is red
+              // in the list is red when you open it and amber stays amber.
               valueColor: workerView.summary && !workerView.idle
-                          && Number(workerView.summary.success_ratio) < 0.99
+                          && Number(workerView.summary.success_ratio) < 1 - root.errorThreshold
                           ? Color.urgent : root.foreground
             }
 
             Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
+              width: (parent.width - Style.spacing.sm * 2) / 3
               value: workerView.summary ? root.cpuTime(workerView.summary.cpu_p50_us) : "—"
               label: "p50 cpu"
             }
+          }
 
-            Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
-              value: workerView.summary ? root.cpuTime(workerView.summary.cpu_p99_us) : "—"
-              label: "p99 cpu"
-            }
-
-            Stat {
-              width: (parent.width - Style.spacing.sm * 4) / 5
-              value: workerView.summary ? root.compact(workerView.summary.subrequests) : "—"
-              label: "subreq"
+          Text {
+            width: parent.width
+            visible: workerView.summary !== null
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            color: root.foreground
+            opacity: 0.5
+            textFormat: Text.PlainText
+            text: {
+              if (!workerView.summary) return ""
+              var bits = []
+              var p99 = root.cpuTime(workerView.summary.cpu_p99_us)
+              if (p99 !== "") bits.push("p99 " + p99)
+              bits.push(root.compact(workerView.summary.subrequests) + " subrequests")
+              return bits.join("  ·  ")
             }
           }
 
@@ -2253,6 +2344,9 @@ Panel {
           Sparkline {
             id: workerGraph
             width: parent.width
+            // A Worker at 99.5% success has almost no fill, so the bars carry
+            // this chart on their own and need the weight to do it.
+            trackOpacity: 0.34
             visible: workerView.detail !== null
                      && (workerView.detail.series || []).length > 0
             series: workerView.detail ? (workerView.detail.series || []) : []
