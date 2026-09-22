@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.4
+
+- Under Attack Mode says it cannot tell, instead of saying it is off. It is a
+  value of the security level rather than a switch of its own, and a
+  credential without Zone Settings cannot read that level — which includes
+  every wrangler login, the route the Connect screen leads with. The script
+  derived `under_attack` from the empty string it got back and reported
+  `false`; it now reports `null` alongside the refusal. The button reads
+  `Under attack  ?` and its tooltip says what would let it see. The label is
+  keyed on the refusal rather than on an empty level, because the overview is
+  cleared on every range change and an empty level mid-reload would otherwise
+  flash a question mark on a zone that can read its level perfectly well.
+
 ## 0.9.3
 
 - A write no longer leaves the other windows stale. Development Mode, Under

@@ -383,6 +383,22 @@ rm -f "$XDG_STATE_HOME/cloudflarechy/security_level.$ZONE"
 out=$(run attack "$ZONE" off)
 assert_eq "with nothing recorded, off falls back to medium" "medium" "$(field .value <<<"$out")"
 
+# A token that cannot read the security level cannot say Under Attack is off.
+# The zone is put under attack first so this has teeth: with the zone really
+# under attack, "false" is not an unconfirmed answer but a wrong one — and it
+# is the answer the script used to give, because it derived the flag from an
+# empty string.
+run attack "$ZONE" on >/dev/null
+out=$(run --fresh overview "$ZONE")
+assert_eq "under attack is reported when the level is readable" "true" \
+  "$(field '.under_attack' <<<"$out")"
+out=$(CLOUDFLARE_API_TOKEN=read-only-token run --fresh overview "$ZONE")
+assert_eq "  ... and unknown, not off, when it is not" "null" \
+  "$(field '.under_attack' <<<"$out")"
+assert_contains "  ... with the refusal carried alongside" "Unauthorized" \
+  "$(field '.security_level_error' <<<"$out")"
+run attack "$ZONE" off >/dev/null
+
 out=$(run purge "$ZONE")
 assert_eq "the cache can be purged" "everything" "$(field .purged <<<"$out")"
 

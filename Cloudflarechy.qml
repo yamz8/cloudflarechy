@@ -136,6 +136,12 @@ Panel {
   readonly property bool underAttack: root.overview ? root.overview.under_attack === true : false
   readonly property bool securityReadable: root.overview
     ? String(root.overview.security_level || "") !== "" : false
+  // Refused, as opposed to not loaded yet. Keyed on the error rather than on
+  // an empty level: the overview is cleared on every range change, and an
+  // empty level mid-reload would flash "?" on a zone whose level is perfectly
+  // readable — once per keypress, and in every recording of one.
+  readonly property bool securityUnknown: root.overview
+    ? String(root.overview.security_level_error || "") !== "" : false
 
   readonly property int troubledTunnels: {
     var n = 0
@@ -1521,8 +1527,18 @@ Panel {
             }
 
             Button {
-              text: root.underAttack ? "Under attack  on" : "Under attack"
-              tooltipText: root.readOnly
+              // A disabled "Under attack" reads as off, and when the level
+              // could not be read that is exactly what nobody knows. Said on
+              // the button rather than only in a tooltip, because the switch
+              // exists to be glanced at.
+              text: root.underAttack ? "Under attack  on"
+                  : root.securityUnknown ? "Under attack  ?"
+                  : "Under attack"
+              tooltipText: root.securityUnknown
+                           ? (root.readOnly
+                              ? "Can't tell whether it's on — wrangler can neither read the security level nor change it. An API token can do both."
+                              : "Can't tell whether it's on — needs Zone → Zone Settings → Read")
+                           : root.readOnly
                            ? "Needs an API token — wrangler can only be granted zone:read"
                            : root.securityReadable
                            ? (root.underAttack

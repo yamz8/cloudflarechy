@@ -398,6 +398,10 @@ cmd_overview() {
   analytics=$(zone_analytics "$zone" "$range")
   analytics_error=$("$JQ" -r '.error // ""' <<<"$analytics")
 
+  # under_attack is null, not false, when the security level could not be
+  # read. Under Attack is a value of the security level rather than a switch
+  # of its own, so a token without Zone Settings has no way to know — and
+  # false would be a confident answer to a question it never got to ask.
   "$JQ" -n \
     --argjson zone "$zraw" \
     --argjson analytics "$analytics" \
@@ -421,7 +425,8 @@ cmd_overview() {
       },
       security_level: $level,
       security_level_error: $level_error,
-      under_attack: ($level == "under_attack"),
+      under_attack: (if $level_error != "" then null
+                     else ($level == "under_attack") end),
       analytics: ($analytics | del(.error)),
       analytics_error: $analytics_error,
       range: $range,
