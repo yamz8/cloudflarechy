@@ -17,6 +17,11 @@ PORT="${CLOUDFLARECHY_DEMO_PORT:-18799}"
 WORKSPACE="${CLOUDFLARECHY_DEMO_WORKSPACE:-9}"
 MONITOR="${CLOUDFLARECHY_DEMO_MONITOR:-}"
 OUT="${1:-$ROOT/demo.mp4}"
+# The recorder needs a moment before it is reliably capturing, and those frames
+# are a still bar nobody needs to watch. Recorded, then trimmed: TRIM is set a
+# little under SETTLE so a beat of the bar at rest survives as the opening.
+SETTLE=4
+TRIM=4.0
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cloudflarechy"
 TOKEN="$CONFIG_DIR/token"
 STASH="$CONFIG_DIR/token.demo-stash"
@@ -25,6 +30,7 @@ MOCK_PID=""
 REC_PID=""
 ORIGINAL_WORKSPACE=""
 API_PATCHED=0
+DND_RAISED=0
 
 die() { printf 'demo: %s\n' "$*" >&2; exit 1; }
 
@@ -50,6 +56,20 @@ cleanup() {
     hyprctl dispatch "hl.dsp.focus({ workspace = $ORIGINAL_WORKSPACE })" >/dev/null 2>&1
   rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/quickshell/qmlcache"
   omarchy restart shell >/dev/null 2>&1
+  # After the restart, not before. The shell persists this setting lazily, so
+  # toggling it and then killing the shell a moment later lost the write and
+  # left the machine silenced — which is a bad thing for a demo script to do
+  # to someone. Retried until the shell is back up and says it is off.
+  if [[ $DND_RAISED == 1 ]]; then
+    for _ in $(seq 20); do
+      [[ $(omarchy-shell notifications dndState 2>/dev/null) == "off" ]] && break
+      omarchy-shell -q notifications toggleDnd
+      sleep 1
+    done
+    omarchy-shell -q omarchy.indicators refresh
+    [[ $(omarchy-shell notifications dndState 2>/dev/null) == "off" ]] ||
+      printf 'demo: could not put notifications back — run\n  omarchy-toggle-notification-silencing\n' >&2
+  fi
   [[ $status == 0 ]] || printf 'demo: failed, everything put back\n' >&2
   return $status
 }
@@ -80,6 +100,17 @@ rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/quickshell/qmlcache"
 echo "restarting the shell onto the mock"
 omarchy restart shell >/dev/null 2>&1
 sleep 12
+
+# Restarting the shell is itself a notification: the crash capture sees
+# quickshell go away and says so, and that banner lands in the top-right of
+# the frame — which is exactly where the bar icon is. It also counts as a
+# window, so it can fail the empty-workspace check below and abort the run.
+# Silenced for the duration and put back in cleanup, whatever happens.
+if [[ $(omarchy-shell notifications dndState 2>/dev/null) == "off" ]]; then
+  omarchy-shell -q notifications toggleDnd && DND_RAISED=1
+fi
+omarchy-shell -q notifications dismissAll
+sleep 1
 
 ORIGINAL_WORKSPACE=$(hyprctl activeworkspace -j | jq -r '.id')
 hyprctl dispatch "hl.dsp.focus({ workspace = $WORKSPACE })" >/dev/null
@@ -134,22 +165,31 @@ ipc()  { omarchy-shell cloudflarechy "$@" >/dev/null 2>&1; }
 echo "recording"
 gpu-screen-recorder -w "$MONITOR" -f 30 -o "$WORK/raw.mp4" >"$WORK/rec.log" 2>&1 &
 REC_PID=$!
-sleep 4                       # let the encoder settle before anything happens
+sleep "$SETTLE"               # let the encoder settle; trimmed off again below
 
-sleep 2                       # the bar, at rest
-ipc open;              sleep 5    # the zone panel
-key t 3                           # 7 days
-key t 3                           # 30 days
-key t 2                           # back to 24 hours
-ipc worker api-router; sleep 5    # one Worker, in full
-key Escape 1
-key a 5                           # the account: tunnels and Workers
-key Escape 1
-key p 3                           # purge asks first
-key Escape 1                      # ... and takes no for an answer
-key d 6                           # Development Mode on — the bar icon lights
-key d 4                           # and off again, and it goes out
-key Escape 2                      # done
+# Hold times are what the video costs. They are cut close to the bone: the
+# panel is the same shape in every beat, so by the third one the eye knows
+# where to look and only the changed rows need finding.
+#
+# The floor is not readability, it is the round trip. Every `t` reloads the
+# window, opening a Worker fetches it, and `d` is a write followed by a
+# refresh — hold any of those too briefly and the frame that ships is a
+# half-drawn panel. Development Mode keeps the longest hold for that reason
+# and not for emphasis: it has to finish writing before the bar icon lights,
+# which is the one thing this whole video exists to show.
+sleep 0.6                         # the bar, at rest
+ipc open;              sleep 2.5  # the zone panel
+key t 1.5                         # 7 days
+key t 1.5                         # 30 days
+ipc worker api-router; sleep 2.2  # one Worker, in full
+key Escape 0.4
+key a 2.2                         # the account: tunnels and Workers
+key Escape 0.4
+key p 1.5                         # purge asks first
+key Escape 0.4                    # ... and takes no for an answer
+key d 3                           # Development Mode on — the bar icon lights
+key d 1.8                         # and off again, and it goes out
+key Escape 0.3                    # done
 
 sleep 1
 kill -INT "$REC_PID" 2>/dev/null; wait "$REC_PID" 2>/dev/null || true
@@ -174,7 +214,8 @@ sleep 2
 # sample-and-hold only turns the anti-aliasing into visible 2x2 blocks. Checked
 # both at 8x on the "50.0%" delta before choosing.
 echo "encoding"
-ffmpeg -y -loglevel error -i "$WORK/raw.mp4" -f lavfi -i anullsrc=r=44100:cl=stereo \
+ffmpeg -y -loglevel error -ss "$TRIM" -i "$WORK/raw.mp4" \
+  -f lavfi -i anullsrc=r=44100:cl=stereo \
   -vf "crop=${cw}:${ch}:${cx}:0,scale=iw*2:ih*2:flags=lanczos" \
   -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
   -c:a aac -b:a 64k -shortest \

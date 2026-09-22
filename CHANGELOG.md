@@ -11,6 +11,17 @@
   doing something. Dropped by prefix now, and the tests pin the behaviour
   rather than the key name, because a name assertion would have drifted along
   with the bug.
+- `tests/demo.sh` silences notifications while it records. Restarting the
+  shell makes the crash capture announce it, and the banner landed in the
+  top-right of the frame — over the bar icon, which is the one thing the last
+  beat exists to show. It also counted as a window and could abort the run on
+  the empty-workspace check. Put back afterwards, after the shell is up again
+  rather than before, because the setting is persisted lazily and restarting
+  the shell on top of the write lost it.
+- The demo is about twenty seconds instead of fifty, and twice the size it
+  was. The encoder's settling time is trimmed off the head rather than shipped
+  as a still frame, and the frame is doubled before encoding so the small type
+  survives a re-encode.
 
 ## 0.9.2
 
