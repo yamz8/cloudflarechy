@@ -15,7 +15,7 @@ Tunnel is `down` or `degraded`, or when the zone starts answering 5xx at a rate
 worth looking at. Hovering the icon says which.
 
 Everything shown comes from the Cloudflare API. Nothing is computed locally
-except the cache ratio, which is cached ÷ total over the same 24 hours, and
+except the cache ratio, which is cached ÷ total over the same window, and
 the period-over-period deltas, which are derived from the same one request.
 
 ## Install
@@ -103,8 +103,14 @@ panel becomes a dashboard whose buttons simply say why they cannot act.
 
 If you have ever run `wrangler login`, the panel already works. With no API
 token configured it falls back to wrangler's OAuth credential, which covers
-everything this plugin *reads* — zones, the full 24h analytics, tunnels and
-Workers.
+everything this plugin *reads* — zones, traffic at all three windows, the
+Workers answering for a zone, and the account's Workers and tunnels.
+
+That analytics line is worth spelling out, because the scope name does not
+suggest it: `zone:read` is enough for the GraphQL Analytics API, so the graph,
+the totals and the deltas all work on a credential that was never granted an
+analytics scope. There isn't one to grant — wrangler's catalogue has no
+analytics scope at all.
 
 It cannot cover anything this plugin *writes*, and that is a hard ceiling
 rather than a precaution. The entire scope catalogue wrangler is able to
@@ -249,8 +255,8 @@ the moment it is raised. If the plugin has no record, it falls back to `medium`.
 **Tunnels** — every `cfd_tunnel` on the account, its status and its connection
 count, which is what separates "healthy" from "healthy, on one leg".
 
-**Workers** — the five busiest scripts, with 24h invocations, errors and p50
-CPU time:
+**Workers** — every script on the account, with 24h invocations, errors and
+p50 CPU time:
 
 ```
 pokachy              4.2K req · 8.6ms
