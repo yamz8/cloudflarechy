@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.3
+
+- A write no longer leaves the other windows stale. Development Mode, Under
+  Attack and a purge each dropped `overview.<zone>.json`, which stopped being
+  a real key when the range went into it — so the three cached windows
+  survived the write they had just been invalidated by. The panel hid it by
+  reloading with `--fresh`; anyone driving `bin/cloudflarechy` directly got up
+  to a minute of stale state, and the three lines read as though they were
+  doing something. Dropped by prefix now, and the tests pin the behaviour
+  rather than the key name, because a name assertion would have drifted along
+  with the bug.
+
 ## 0.9.2
 
 - `tests/demo.sh` records a demo of the panel against the mock: the zone, the

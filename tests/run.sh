@@ -386,6 +386,39 @@ assert_eq "with nothing recorded, off falls back to medium" "medium" "$(field .v
 out=$(run purge "$ZONE")
 assert_eq "the cache can be purged" "everything" "$(field .purged <<<"$out")"
 
+# A write changes what every window of this zone would report, so it has to
+# clear all of them. This is pinned by behaviour rather than by key name on
+# purpose: when the range went into the cache key, the three write commands
+# went on dropping the key that existed before it, and the panel hid the
+# breakage by reloading with --fresh anyway. A name assertion would have
+# drifted with them; emptying the directory and counting what survives a
+# write does not.
+for r in 24h 7d 30d; do run overview "$ZONE" "$r" >/dev/null; done
+assert_eq "every window of a zone is cached" "3" \
+  "$(ls "$XDG_CACHE_HOME"/cloudflarechy/overview."$ZONE".*.json 2>/dev/null | wc -l)"
+run devmode "$ZONE" on >/dev/null
+assert_eq "  ... and development mode clears all of them" "0" \
+  "$(ls "$XDG_CACHE_HOME"/cloudflarechy/overview."$ZONE".*.json 2>/dev/null | wc -l)"
+
+for r in 24h 7d 30d; do run overview "$ZONE" "$r" >/dev/null; done
+run attack "$ZONE" on >/dev/null
+assert_eq "  ... so does under attack" "0" \
+  "$(ls "$XDG_CACHE_HOME"/cloudflarechy/overview."$ZONE".*.json 2>/dev/null | wc -l)"
+run attack "$ZONE" off >/dev/null
+
+for r in 24h 7d 30d; do run overview "$ZONE" "$r" >/dev/null; done
+run purge "$ZONE" >/dev/null
+assert_eq "  ... and so does a purge" "0" \
+  "$(ls "$XDG_CACHE_HOME"/cloudflarechy/overview."$ZONE".*.json 2>/dev/null | wc -l)"
+
+# The neighbouring zone's windows are not collateral: the prefix has to end at
+# the zone id, or one zone's switch would blank another's.
+run overview "$ZONE2" 24h >/dev/null
+for r in 24h 7d 30d; do run overview "$ZONE" "$r" >/dev/null; done
+run devmode "$ZONE" off >/dev/null
+assert_eq "  ... without touching another zone" "1" \
+  "$(ls "$XDG_CACHE_HOME"/cloudflarechy/overview."$ZONE2".*.json 2>/dev/null | wc -l)"
+
 out=$(run devmode "$ZONE" sideways)
 assert_contains "a bad argument is refused" "on or off" "$(field .error <<<"$out")"
 out=$(run purge)

@@ -237,6 +237,13 @@ cache_write() {
 
 cache_drop() { rm -f "$CACHE_DIR/$(cache_key "$1")" 2>/dev/null; return 0; }
 
+# Drops every entry whose name starts with $1. A zone's overview is cached per
+# range — overview.<zone>.24h.json and two siblings — so a write that changes
+# the zone has to clear all of them, not the one key that happened to exist
+# before the range selector. cache_key is a character substitution rather than
+# a hash, so the prefix survives it and a glob still matches.
+cache_drop_prefix() { rm -f "$CACHE_DIR/$(cache_key "$1")"* 2>/dev/null; return 0; }
+
 # Reads take this path: the payload is printed for the shell either way, and
 # cached only when it parsed as JSON — a truncated answer is worth nothing on
 # the next open.
@@ -978,7 +985,7 @@ cmd_devmode() {
   err=$(api_error "$raw")
   [[ -n $err ]] && die "$err" "The token needs Zone → Zone Settings → Edit."
 
-  cache_drop "overview.$zone.json"
+  cache_drop_prefix "overview.$zone."
   cache_drop "zones.json"
   "$JQ" '{ok: true, value: (.result.value // ""), time_remaining: (.result.time_remaining // 0)}' <<<"$raw"
 }
@@ -1021,7 +1028,7 @@ cmd_attack() {
   err=$(api_error "$raw")
   [[ -n $err ]] && die "$err" "The token needs Zone → Zone Settings → Edit."
 
-  cache_drop "overview.$zone.json"
+  cache_drop_prefix "overview.$zone."
   "$JQ" --arg restored "$target" '{ok: true, value: (.result.value // $restored)}' <<<"$raw"
 }
 
@@ -1036,7 +1043,7 @@ cmd_purge() {
   err=$(api_error "$raw")
   [[ -n $err ]] && die "$err" "The token needs Zone → Cache Purge → Purge."
 
-  cache_drop "overview.$zone.json"
+  cache_drop_prefix "overview.$zone."
   "$JQ" -n '{ok: true, purged: "everything"}'
 }
 
