@@ -161,9 +161,21 @@ sleep 2
 # The silent audio track is not an accident: some places that take video
 # refuse a file with no audio stream at all, and a demo of a bar widget has
 # nothing to say out loud.
+#
+# Doubled after the crop. The crop is native screen pixels — around 550 wide,
+# which is the panel's real size — and a frame that small is re-encoded by
+# whatever site it is posted to at a bitrate budgeted for its dimensions, then
+# upscaled again by each viewer's player. Doubling first buys a bigger budget
+# for the thing that matters here, which is 16px type staying legible.
+#
+# Lanczos, not nearest-neighbour. Nearest-neighbour is the right choice for a
+# hard pixel grid, and this is not one: Qt anti-aliases its glyphs and the bar
+# caps are rounded, so there are no hard edges to preserve — doubling by
+# sample-and-hold only turns the anti-aliasing into visible 2x2 blocks. Checked
+# both at 8x on the "50.0%" delta before choosing.
 echo "encoding"
 ffmpeg -y -loglevel error -i "$WORK/raw.mp4" -f lavfi -i anullsrc=r=44100:cl=stereo \
-  -vf "crop=${cw}:${ch}:${cx}:0" \
+  -vf "crop=${cw}:${ch}:${cx}:0,scale=iw*2:ih*2:flags=lanczos" \
   -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
   -c:a aac -b:a 64k -shortest \
   "$OUT"
