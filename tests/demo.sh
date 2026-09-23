@@ -108,8 +108,21 @@ API_PATCHED=1
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/cloudflarechy"
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/quickshell/qmlcache"
 echo "restarting the shell onto the mock"
-omarchy restart shell >/dev/null 2>&1
-sleep 12
+# Its exit status is not the answer. `omarchy restart shell` gives a new
+# shell about two seconds to answer and calls it failed after that — and one
+# starting with an empty QML cache on a machine short of memory took nine,
+# which under errexit ended the run with nothing said. What matters is that
+# the widget answers, so that is what is waited for, for up to a minute.
+omarchy restart shell >/dev/null 2>&1 || true
+for _ in $(seq 60); do
+  omarchy-shell cloudflarechy status >/dev/null 2>&1 && break
+  sleep 1
+done
+omarchy-shell cloudflarechy status >/dev/null 2>&1 ||
+  die "the shell did not come back within a minute of restarting"
+# Answering is not the same as having loaded; the widget's first reads are
+# still in flight.
+sleep 4
 
 # Restarting the shell is itself a notification: the crash capture sees
 # quickshell go away and says so, and that banner lands in the top-right of

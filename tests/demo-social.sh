@@ -6,8 +6,8 @@
 # Built for a feed rather than for the README:
 #
 # - Short. A pass over the panel's views — the zone at a day and a week, a
-#   Worker, the zone again at a month, the account — then the panel changing
-#   theme, which is
+#   Worker, the zone again at a month, the account, a tunnel — then the panel
+#   changing theme, which is
 #   the part an Omarchy audience shares. No captions, no title card, and no
 #   switches flipped; the views carry it. Each is held long enough to take in
 #   rather than to read every figure: about two seconds.
@@ -97,6 +97,8 @@ social_cut() {
   ipc worker api-router; sleep 3
   key Escape 0.5
   key a 3
+  ipc tunnel homelab; sleep 3
+  key Escape 0.5
   key Escape 0.5
   # Once round the themes as well: a wallpaper the shell has not loaded yet
   # comes in as a black frame on its first transition.
@@ -126,9 +128,11 @@ social_cut() {
   key Escape 0.9
   key t 1.8                            # the month
   key a 2.3                            # the account: tunnels and Workers
-  # Back to the zone for the themes. The first one lands ~0.7s after it is
-  # asked for, which gives the zone a second on screen rather than a flash.
-  key Escape 0.3
+  ipc tunnel homelab; sleep 2.0        # one tunnel: its routes and connectors
+  # The themes play over the tunnel rather than back on the zone: going back
+  # would pass through the account screen for a third of a second, which is
+  # the flicker the order above exists to avoid. The first theme lands ~0.7s
+  # after it is asked for, so the tunnel still holds for close to three.
   # A theme lands ~0.7s after it is asked for. That only shifts the ones in
   # the middle; the last is cut by the end of the take, so it gets the 0.7s
   # back.

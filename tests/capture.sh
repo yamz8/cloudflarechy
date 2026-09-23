@@ -87,8 +87,21 @@ grep -q "127.0.0.1:$PORT" "$ROOT/bin/cloudflarechy" || die "could not redirect t
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/cloudflarechy"
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/quickshell/qmlcache"
 echo "restarting the shell onto the mock"
-omarchy restart shell >/dev/null 2>&1
-sleep 12
+# Its exit status is not the answer. `omarchy restart shell` gives a new
+# shell about two seconds to answer and calls it failed after that — and one
+# starting with an empty QML cache on a machine short of memory took nine,
+# which under errexit ended the run with nothing said. What matters is that
+# the widget answers, so that is what is waited for, for up to a minute.
+omarchy restart shell >/dev/null 2>&1 || true
+for _ in $(seq 60); do
+  omarchy-shell cloudflarechy status >/dev/null 2>&1 && break
+  sleep 1
+done
+omarchy-shell cloudflarechy status >/dev/null 2>&1 ||
+  die "the shell did not come back within a minute of restarting"
+# Answering is not the same as having loaded; the widget's first reads are
+# still in flight.
+sleep 4
 
 ORIGINAL_WORKSPACE=$(hyprctl activeworkspace -j | jq -r '.id')
 hyprctl dispatch "hl.dsp.focus({ workspace = $WORKSPACE })" >/dev/null
@@ -141,12 +154,14 @@ open_panel() { omarchy-shell cloudflarechy open >/dev/null 2>&1; }
 open_credentials() { open_panel; sleep 3; wtype -k c; }
 open_account() { open_panel; sleep 3; wtype -k a; }
 open_worker() { omarchy-shell cloudflarechy worker api-router >/dev/null 2>&1; }
+open_tunnel() { omarchy-shell cloudflarechy tunnel homelab >/dev/null 2>&1; }
 
 echo "capturing"
 capture preview.png open_panel
 capture account.png open_account
 capture connect.png open_credentials
 capture worker.png  open_worker
+capture tunnel.png  open_tunnel
 cp "$SHOT_DIR"/out/*.png "$ROOT"/
 
 echo

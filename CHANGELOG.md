@@ -28,6 +28,11 @@
   a tunnel that had lost a connection as whole. The README had also claimed
   the count separated healthy from "healthy, on one leg"; a whole
   `cloudflared` holds four, and one short of that is already `degraded`.
+- `tests/capture.sh` and `tests/demo.sh` wait for the widget to answer after
+  restarting the shell rather than trusting `omarchy restart shell`, which
+  gives a new shell about two seconds and reports failure after that. Starting
+  from an empty QML cache on a machine short of memory took nine, and the
+  scripts ended there without a word. `capture.sh` also takes the tunnel.
 - `tests/capture.sh` keeps its pictures aside until all four are taken. The
   shell reloads a plugin when a file in its directory changes, so writing the
   first picture into the repository reloaded the widget under the second, and
