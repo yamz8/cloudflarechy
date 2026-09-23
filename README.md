@@ -470,16 +470,16 @@ recording is gitignored: it is a megabyte that changes wholesale on each take,
 and the script that makes it is the part worth keeping.
 
 `--social` makes a different cut, for a feed that autoplays it on a phone:
-1080x1350 at 60fps, about two seconds on each view — the zone at a day and
-a week, a Worker, the zone at a month, the account — and then the panel going through three
-Omarchy themes and back. The shell is drawn at a
-larger type size while it records so the panel fills the frame with real
-pixels. The shell's wallpaper wipe drops to black for a few frames as it
-finishes; those frames are cut and the one before held. The themes and the type size live only in the running shell's memory —
-nothing is written — and the restart at the end puts your own back. The mock
-serves traffic with a day in it for this cut (`CLOUDFLARECHY_MOCK_SHOWCASE`);
-the tests never ask for it. `CLOUDFLARECHY_DEMO_KEEP=<dir>` keeps the raw
-recording and its timings.
+1080x1350 at 60fps, about two seconds on each view — the zone at a day and a
+week, a Worker, the zone at a month, the account, a tunnel — and then the
+panel going through two Omarchy themes, ending on the second. The shell is
+drawn at a larger type size while it records so the panel fills the frame with
+real pixels. The shell's wallpaper wipe drops to black for a few frames as it
+finishes; those frames are cut and the one before held. The themes and the
+type size live only in the running shell's memory — nothing is written — and
+the restart at the end puts your own back. The mock serves traffic with a day
+in it for this cut (`CLOUDFLARECHY_MOCK_SHOWCASE`); the tests never ask for
+it. `CLOUDFLARECHY_DEMO_KEEP=<dir>` keeps the raw recording and its timings.
 
 The assertions were checked by breaking the code on purpose and confirming they
 went red. That found a real gap the first time — the security-level fallback

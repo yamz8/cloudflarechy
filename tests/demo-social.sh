@@ -16,14 +16,16 @@
 # - The shell drawn at a larger type size, so the panel fills that frame with
 #   real pixels rather than upscaled ones. At the shell's default size it
 #   filled two thirds of it and its figures were unreadable at feed size.
-# - Three Omarchy themes, in the shell's memory only. The themes are applied
+# - Two Omarchy themes, in the shell's memory only. The themes are applied
 #   with the shell's own transition call rather than omarchy-theme-set, which
 #   would also retint terminals, editors and the browser and write the choice
 #   to disk. Nothing is written, and demo.sh's closing shell restart reloads
 #   the real theme and type size.
-# - It ends on the panel it opened on, so a player that loops it loops cleanly.
+# - It ends on the second theme rather than switching back. The switch back
+#   to the machine's own theme looked like a glitch as the last thing seen,
+#   and a loop that changes theme on the jump reads as one more switch.
 
-THEMES=(rose-pine gruvbox osaka-jade)
+THEMES=(rose-pine gruvbox)
 FONT_SIZE=15      # the shell's base-size while recording; the default is 12
 OUT_W=1080; OUT_H=1350
 OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
@@ -102,7 +104,7 @@ social_cut() {
   key Escape 0.5
   # Once round the themes as well: a wallpaper the shell has not loaded yet
   # comes in as a black frame on its first transition.
-  theme rose-pine 1.5; theme gruvbox 1.5; theme osaka-jade 1.5; theme home 2
+  theme rose-pine 1.5; theme gruvbox 1.5; theme home 2
   ipc close; sleep 1
   ipc open;  sleep 4
 
@@ -133,11 +135,10 @@ social_cut() {
   # would pass through the account screen for a third of a second, which is
   # the flicker the order above exists to avoid. The first theme lands ~0.7s
   # after it is asked for, so the tunnel still holds for close to three.
-  # A theme lands ~0.7s after it is asked for. That only shifts the ones in
-  # the middle; the last is cut by the end of the take, so it gets the 0.7s
-  # back.
-  theme rose-pine 1.5; theme gruvbox 1.5; theme osaka-jade 1.5
-  theme home 2.1
+  # A theme lands ~0.7s after it is asked for. That only shifts the first;
+  # the last is cut by the end of the take, so its hold gets the 0.7s back.
+  theme rose-pine 1.5
+  theme gruvbox 2.8
   mark end
 
   kill -INT "$REC_PID" 2>/dev/null; wait "$REC_PID" 2>/dev/null || true

@@ -53,7 +53,7 @@
   the month the selector had moved on to.
 - `tests/demo.sh --social` records a twenty-second cut for a feed rather than
   the README: 4:5 at 60fps, about two seconds on each of the panel's views,
-  then three Omarchy themes and back to the first. Themes and a larger type
+  then two Omarchy themes, ending on the second. Themes and a larger type
   size are applied to the running shell only, and the closing restart takes
   them away again.
 - The mock serves traffic with a shape in it when asked
