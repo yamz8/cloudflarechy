@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - A tunnel opens into its own screen, the way a Worker does. There is no graph
   — Cloudflare keeps no traffic figures for a tunnel — so it is a map instead:
