@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "cloudflarechy",
+  "id": "yamz8.cloudflarechy",
   "name": "Cloudflarechy",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "author": "yamz8",
   "license": "MIT",
   "description": "One Cloudflare zone from the Omarchy bar: 24h traffic, cache ratio, tunnels, and the two switches you forget to turn off",

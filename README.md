@@ -25,15 +25,15 @@ omarchy plugin add https://github.com/yamz8/cloudflarechy --enable
 ```
 
 That clones it, validates the manifest, and offers to place it on the bar. It
-lands in `~/.config/omarchy/plugins/cloudflarechy/` — the directory is named
-from the manifest id, not the repository. Later, `omarchy plugin update
-cloudflarechy` pulls new versions.
+lands in `~/.config/omarchy/plugins/yamz8.cloudflarechy/` — the directory is
+named from the manifest id, not the repository. Later, `omarchy plugin update
+yamz8.cloudflarechy` pulls new versions.
 
 Already on disk, and you only want it on the bar:
 
 ```bash
-omarchy plugin enable cloudflarechy --section right
-omarchy bar move cloudflarechy --after omarchy.tray   # somewhere else in the row
+omarchy plugin enable yamz8.cloudflarechy --section right
+omarchy bar move yamz8.cloudflarechy --after omarchy.tray   # somewhere else in the row
 ```
 
 Nothing needs to be prepared first. Open the panel and it shows a **Connect**
@@ -506,8 +506,8 @@ caught a refactor that silently deleted three functions.
 ## Uninstall
 
 ```bash
-omarchy plugin disable cloudflarechy
-rm -rf ~/.config/omarchy/plugins/cloudflarechy ~/.cache/cloudflarechy ~/.local/state/cloudflarechy
+omarchy plugin disable yamz8.cloudflarechy
+rm -rf ~/.config/omarchy/plugins/yamz8.cloudflarechy ~/.cache/cloudflarechy ~/.local/state/cloudflarechy
 ```
 
 MIT licensed. Not affiliated with Cloudflare.

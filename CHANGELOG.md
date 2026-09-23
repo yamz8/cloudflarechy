@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.1
+
+- The plugin id is `yamz8.cloudflarechy`, namespaced like Omarchy's own
+  example and like every other plugin published from this account. A bare
+  `cloudflarechy` could collide with anyone else's plugin of that name, and
+  the second one installed would be refused. The install directory follows
+  the id, so it moves too; `omarchy-shell cloudflarechy …` is unchanged,
+  since the IPC target is its own name. Renamed before 0.10.0 was announced,
+  so no installed copy needs moving — one that does needs its bar entry in
+  `shell.json` changed to the new id.
+
 ## 0.10.0
 
 - A tunnel opens into its own screen, the way a Worker does. There is no graph
