@@ -284,7 +284,7 @@ assert_eq "  ... leaving the other range alone" "19812" \
 out=$(run --fresh tunnels "$ACCOUNT")
 assert_eq "tunnels are listed" "2" "$(field '.tunnels | length' <<<"$out")"
 assert_eq "  ... and a status" "down" "$(field '.tunnels[1].status' <<<"$out")"
-assert_eq "  ... counting live connections only" "4" "$(field '.tunnels[0].connections' <<<"$out")"
+assert_eq "  ... counting live connections only" "8" "$(field '.tunnels[0].connections' <<<"$out")"
 assert_eq "  ... which is none for a tunnel that is down" "0" "$(field '.tunnels[1].connections' <<<"$out")"
 assert_eq "a serving tunnel is timed from when it connected" "true" \
   "$(field '.tunnels[0].since | fromdateiso8601 < (now - 3*86400)' <<<"$out")"
@@ -297,6 +297,41 @@ assert_eq "  ... from its ingress, once each, catch-all left out" "3" \
   "$(field '.tunnels[0].hostnames | length' <<<"$out")"
 assert_eq "a local tunnel is marked as such" "local" "$(field '.tunnels[1].config' <<<"$out")"
 assert_eq "  ... with no hostnames claimed" "null" "$(field '.tunnels[1].hostnames' <<<"$out")"
+
+out=$(run --fresh tunnel "$ACCOUNT" t1)
+assert_eq "one tunnel is read in full" "homelab" "$(field '.tunnel.name' <<<"$out")"
+assert_eq "  ... its routes in the order they match" \
+  "grafana.example.com nas.example.com nas.example.com ssh.example.com " \
+  "$(field '[.routes[].hostname] | join(" ")' <<<"$out")"
+assert_eq "  ... paths kept apart on a shared hostname" "/api/*" "$(field '.routes[1].path' <<<"$out")"
+assert_eq "  ... the catch-all included, with nowhere named" "http_status:404" \
+  "$(field '.routes[-1].service' <<<"$out")"
+assert_eq "  ... and which routes check Access" "true false false true false" \
+  "$(field '[.routes[].access] | map(tostring) | join(" ")' <<<"$out")"
+assert_eq "  ... its connectors" "2" "$(field '.connectors | length' <<<"$out")"
+assert_eq "  ... each with its live connections by data centre" "fra08 fra08 ams01 ams01" \
+  "$(field '.connectors[0].colos | join(" ")' <<<"$out")"
+assert_eq "  ... told apart by where they dial out from" "198.51.100.7" \
+  "$(field '.connectors[1].origin_ip' <<<"$out")"
+assert_eq "  ... and what they run" "2025.8.0 linux_arm64" \
+  "$(field '.connectors[1] | "\(.version) \(.arch)"' <<<"$out")"
+assert_eq "  ... the private networks behind it" "10.0.0.0/24" "$(field '.networks[0].network' <<<"$out")"
+assert_eq "  ... and no one else's" "0" "$(run --fresh tunnel "$ACCOUNT" t2 | field '.networks | length')"
+out=$(run --fresh tunnel "$ACCOUNT" t2)
+assert_eq "a local tunnel has no routes to show" "null" "$(field '.routes' <<<"$out")"
+assert_eq "  ... and that is not an error" "" "$(field '.routes_error' <<<"$out")"
+assert_eq "  ... nor is being down with no connectors" "0" "$(field '.connectors | length' <<<"$out")"
+out=$(run --fresh tunnel "$ACCOUNT_NO_METRICS" t9)
+assert_eq "a tunnel whose insides are refused still reads" "edge" "$(field '.tunnel.name' <<<"$out")"
+assert_eq "  ... its routes unknown, not empty" "null" "$(field '.routes' <<<"$out")"
+assert_contains "  ... with the refusal kept" "Unauthorized" "$(field '.routes_error' <<<"$out")"
+assert_eq "  ... and its connectors unknown too" "null" "$(field '.connectors' <<<"$out")"
+assert_contains "  ... each part refused on its own" "Unauthorized" "$(field '.connectors_error' <<<"$out")"
+assert_contains "an unknown tunnel is an error" "not found" \
+  "$(run --fresh tunnel "$ACCOUNT" nope | field '.error')"
+assert_contains "a missing tunnel id is refused" "needs a tunnel id" \
+  "$(run tunnel "$ACCOUNT" | field '.error')"
+
 out=$(run --fresh tunnels "$ACCOUNT_NO_METRICS")
 assert_eq "routes that cannot be read are unknown, not empty" "null" \
   "$(field '.tunnels[0].hostnames' <<<"$out")"

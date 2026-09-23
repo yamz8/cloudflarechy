@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- A tunnel opens into its own screen, the way a Worker does. There is no graph
+  — Cloudflare keeps no traffic figures for a tunnel — so it is a map instead:
+  every route in match order with where it forwards and whether `cloudflared`
+  checks Access on it, each connector with its version, architecture, uptime
+  and its live connections as data-centre chips, and any private networks
+  behind it. Four requests side by side, each failing on its own. `tunnel`
+  on the command line, `tunnel <name>` over IPC. The tunnel `/token`
+  endpoint, which returns the secret that runs the tunnel, is never called.
+- The account screen opens with three figures like the zone does — tunnels
+  up, Worker requests over the day, errors and their share — summed from the
+  rows below. Tunnels and Workers share one row shape: a dot, the name and
+  whatever could be bad news, the rest underneath. A Worker's dot takes its
+  error count's colour, hollow when nothing called it. A tunnel that is down
+  says so in red, not only in its dot.
 - Tunnels say what they serve and how long they have been the way they are:
   `healthy for 3d · 4 conn`, and under the name the public hostnames from
   the tunnel's ingress rules — `grafana, nas, ssh · example.com`. A locally

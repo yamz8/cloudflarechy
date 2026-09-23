@@ -284,6 +284,96 @@ def showcase_worker_totals(now):
     return out
 
 
+# --- tunnels ------------------------------------------------------------
+# One realistic account and one that is refused its routes. A whole
+# cloudflared holds four connections; homelab runs two of them, so it has
+# eight, plus a ninth Cloudflare is still listing after it dropped — which
+# every count has to leave out.
+def _stamp(**ago):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (now - datetime.timedelta(**ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _conn(colo, client, version, ip, pending=False, **opened):
+    return {"id": f"c-{colo}-{client}", "colo_name": colo, "client_id": client,
+            "client_version": version, "origin_ip": ip,
+            "opened_at": _stamp(**(opened or {"days": 3})),
+            "is_pending_reconnect": pending}
+
+
+HOMELAB_CONNECTORS = [
+    {"id": "k1", "arch": "linux_amd64", "version": "2025.9.1",
+     "run_at": _stamp(days=3, hours=2), "conns": [
+         _conn("fra08", "k1", "2025.9.1", "203.0.113.10"),
+         _conn("fra08", "k1", "2025.9.1", "203.0.113.10"),
+         _conn("ams01", "k1", "2025.9.1", "203.0.113.10"),
+         _conn("ams01", "k1", "2025.9.1", "203.0.113.10"),
+         _conn("ams01", "k1", "2025.9.1", "203.0.113.10", pending=True, minutes=1)]},
+    {"id": "k2", "arch": "linux_arm64", "version": "2025.8.0",
+     "run_at": _stamp(hours=3), "conns": [
+         _conn("fra08", "k2", "2025.8.0", "198.51.100.7", hours=3),
+         _conn("cdg02", "k2", "2025.8.0", "198.51.100.7", hours=3),
+         _conn("cdg02", "k2", "2025.8.0", "198.51.100.7", hours=3),
+         _conn("fra08", "k2", "2025.8.0", "198.51.100.7", hours=3)]},
+]
+
+STAGING_CONNECTORS = [
+    {"id": "k3", "arch": "linux_amd64", "version": "2025.9.1",
+     "run_at": _stamp(days=9), "conns": [
+         _conn("fra08", "k3", "2025.9.1", "203.0.113.20", days=9),
+         _conn("fra08", "k3", "2025.9.1", "203.0.113.20", days=9),
+         _conn("ams01", "k3", "2025.9.1", "203.0.113.20", days=9),
+         _conn("ams01", "k3", "2025.9.1", "203.0.113.20", days=9)]},
+]
+
+TEAMNET_ROUTES = [
+    {"id": "r1", "network": "10.0.0.0/24", "comment": "home lan",
+     "tunnel_id": "t1", "tunnel_name": "homelab",
+     "virtual_network_name": "default"},
+]
+
+
+def tunnel_connectors(tunnel_id):
+    if tunnel_id == "t1":
+        return HOMELAB_CONNECTORS
+    if tunnel_id == "t2" and CALM:
+        return STAGING_CONNECTORS
+    return []
+
+
+def account_tunnels(account):
+    if account == ACCOUNT:
+        return [
+            {"id": "t1", "name": "homelab", "status": "healthy",
+             "config_src": "cloudflare", "remote_config": True,
+             "connections": [c for k in HOMELAB_CONNECTORS for c in k["conns"]],
+             "conns_active_at": _stamp(days=3, hours=2),
+             "conns_inactive_at": None,
+             "created_at": "2026-01-02T03:04:05Z"},
+            # Managed from cloudflared's own config file, so its routes are
+            # nowhere the API can read them — except in the showcase, which
+            # manages it remotely too so both rows have something to say.
+            {"id": "t2", "name": "staging",
+             "status": "healthy" if CALM else "down",
+             "config_src": "cloudflare" if SHOWCASE else "local",
+             "remote_config": SHOWCASE,
+             "connections": STAGING_CONNECTORS[0]["conns"] if CALM else [],
+             "conns_active_at": _stamp(days=9) if CALM else None,
+             "conns_inactive_at": None if CALM else _stamp(minutes=12),
+             "created_at": "2026-02-02T03:04:05Z"},
+        ]
+    if account == ACCOUNT_NO_METRICS:
+        # Remotely managed, but its routes and its connectors are refused:
+        # the case where the tunnel is visible and its insides are not.
+        return [
+            {"id": "t9", "name": "edge", "status": "healthy",
+             "config_src": "cloudflare", "remote_config": True,
+             "connections": [{"is_pending_reconnect": False}] * 4,
+             "conns_active_at": "2026-01-01T00:00:00Z",
+             "created_at": "2026-01-01T00:00:00Z"}]
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -340,44 +430,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(denied(), 403)
             return self.reply(ok({"id": "security_level",
                                   "value": STATE["security_level"]}))
-        if path == f"/accounts/{ACCOUNT}/cfd_tunnel":
-            now = datetime.datetime.now(datetime.timezone.utc)
-            stamp = lambda **ago: (now - datetime.timedelta(**ago)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ")
-            live = {"colo_name": "fra08", "is_pending_reconnect": False}
-            return self.reply(ok([
-                # A healthy cloudflared holds four connections. The fifth
-                # dropped a minute ago and Cloudflare is still listing it,
-                # flagged — the count has to leave it out.
-                {"id": "t1", "name": "homelab", "status": "healthy",
-                 "config_src": "cloudflare", "remote_config": True,
-                 "connections": [live] * 4 + [
-                     {"colo_name": "ams01", "is_pending_reconnect": True}],
-                 "conns_active_at": stamp(days=3, hours=2),
-                 "conns_inactive_at": None,
-                 "created_at": "2026-01-02T03:04:05Z"},
-                # Managed from cloudflared's own config file, so its routes
-                # are nowhere the API can read them.
-                # The showcase manages it remotely too, so both rows have
-                # something to say about what they serve.
-                {"id": "t2", "name": "staging",
-                 "status": "healthy" if CALM else "down",
-                 "config_src": "cloudflare" if SHOWCASE else "local",
-                 "remote_config": SHOWCASE,
-                 "connections": [live] * 4 if CALM else [],
-                 "conns_active_at": stamp(days=9) if CALM else None,
-                 "conns_inactive_at": None if CALM else stamp(minutes=12),
-                 "created_at": "2026-02-02T03:04:05Z"},
-            ]))
-        if path == f"/accounts/{ACCOUNT_NO_METRICS}/cfd_tunnel":
-            # Remotely managed, but its routes are refused: the case where a
-            # tunnel has hostnames nobody here is allowed to see.
-            return self.reply(ok([
-                {"id": "t9", "name": "edge", "status": "healthy",
-                 "config_src": "cloudflare", "remote_config": True,
-                 "connections": [{"is_pending_reconnect": False}] * 4,
-                 "conns_active_at": "2026-01-01T00:00:00Z",
-                 "created_at": "2026-01-01T00:00:00Z"}]))
+        tunnels = account_tunnels(path.split("/")[2]) if path.startswith("/accounts/") else None
+        if tunnels is not None and path.endswith("/cfd_tunnel"):
+            return self.reply(ok(tunnels))
+        m = re.fullmatch(r"/accounts/\w+/cfd_tunnel/(\w+)(/connections)?", path)
+        if tunnels is not None and m:
+            found = [t for t in tunnels if t["id"] == m[1]]
+            if not found:
+                return self.reply(denied("tunnel not found", 1003), 404)
+            if not m[2]:
+                return self.reply(ok(found[0]))
+            if m[1] == "t9":
+                return self.reply(denied(), 403)
+            return self.reply(ok(tunnel_connectors(m[1])))
+        if tunnels is not None and path.endswith("/teamnet/routes"):
+            wanted = (self.path.split("tunnel_id=")[1].split("&")[0]
+                      if "tunnel_id=" in self.path else None)
+            return self.reply(ok([r for r in TEAMNET_ROUTES
+                                  if wanted is None or r["tunnel_id"] == wanted]))
         if path == f"/accounts/{ACCOUNT_NO_METRICS}/cfd_tunnel/t9/configurations":
             return self.reply(denied(), 403)
         if SHOWCASE and path == f"/accounts/{ACCOUNT}/cfd_tunnel/t2/configurations":
@@ -391,13 +461,17 @@ class Handler(BaseHTTPRequestHandler):
             # Two paths on one hostname, and the catch-all last with none.
             return self.reply(ok({"tunnel_id": "t1", "source": "cloudflare", "config": {
                 "ingress": [
-                    {"hostname": "grafana.example.com", "service": "http://localhost:3000"},
+                    {"hostname": "grafana.example.com", "service": "http://localhost:3000",
+                     "originRequest": {"access": {"required": True, "teamName": "acme",
+                                                  "audTag": ["aud1"]}}},
                     {"hostname": "nas.example.com", "path": "/api/*",
                      "service": "http://localhost:5001"},
                     {"hostname": "nas.example.com", "service": "http://localhost:5000"},
-                    {"hostname": "ssh.example.com", "service": "ssh://localhost:22"},
+                    {"hostname": "ssh.example.com", "service": "ssh://localhost:22",
+                     "originRequest": {"access": {"required": True, "teamName": "acme",
+                                                  "audTag": ["aud2"]}}},
                     {"service": "http_status:404"},
-                ]}}))
+                ], "warp-routing": {"enabled": True}}}))
         if path in (f"/accounts/{ACCOUNT}/workers/scripts",
                     f"/accounts/{ACCOUNT_NO_METRICS}/workers/scripts"):
             return self.reply(ok([

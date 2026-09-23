@@ -101,6 +101,12 @@ Panel {
   // it; until then the row that was clicked stays lit.
   property string pendingWorker: ""
   readonly property bool workerDetailVisible: root.workerDetailName !== ""
+  // One tunnel, opened the way a Worker is: when its answer has arrived, with
+  // the clicked row lit until then.
+  property string tunnelDetailId: ""
+  property var tunnelDetail: null
+  property string pendingTunnel: ""
+  readonly property bool tunnelDetailVisible: root.tunnelDetailId !== ""
   // Tunnels and Workers belong to the account, not to the zone in the picker,
   // and putting them under it said otherwise. They get their own screen; the
   // zone panel keeps one line about them, because a tunnel going down is one
@@ -750,6 +756,57 @@ Panel {
     root.pendingWorker = ""
   }
 
+  function openTunnelDetail(id) {
+    if (!id || root.accountId === "") return
+    root.pendingTunnel = id
+    bridge.call(["tunnel", root.accountId, id], function(payload) {
+      if (root.pendingTunnel !== id) return
+      root.pendingTunnel = ""
+      root.tunnelDetail = payload || null
+      root.tunnelDetailId = id
+    }, false)
+  }
+
+  function closeTunnelDetail() {
+    root.tunnelDetailId = ""
+    root.tunnelDetail = null
+    root.pendingTunnel = ""
+  }
+
+  function tunnelByName(name) {
+    for (var i = 0; i < root.tunnels.length; i++)
+      if (root.tunnels[i].name === name || root.tunnels[i].id === name) return root.tunnels[i]
+    return null
+  }
+
+  // A tunnel's state in as few words as the row has room for. The dot carries
+  // it in colour; this carries it for anyone who cannot see the colour.
+  function tunnelState(t) {
+    if (!t) return ""
+    var status = String(t.status || "")
+    var held = root.span(t.since)
+    if (status === "healthy") return "up" + (held !== "" ? " " + held : "")
+    if (status === "inactive") return "never connected"
+    return status + (held !== "" ? " " + held : "")
+  }
+
+  // Where a route goes, shortened: plain http is the default and says nothing,
+  // and the catch-all's http_status:404 is only ever a status.
+  function routeTarget(service) {
+    var s = String(service || "")
+    if (s.indexOf("http_status:") === 0) return s.slice(12)
+    if (s.indexOf("http://") === 0) return s.slice(7)
+    return s
+  }
+
+  function workerDotColor(w) {
+    var idle = !w || w.requests === undefined || w.requests === null
+    if (idle) return "transparent"
+    if (root.workerAlarming(w)) return Color.urgent
+    if (Number(w.errors || 0) > 0) return root.brand
+    return root.tunnelColor("healthy")
+  }
+
   function openWorker(name) {
     if (root.accountId === "" || !name) { root.openWorkersDashboard(); return }
     root.openUrl("https://dash.cloudflare.com/" + root.accountId
@@ -949,6 +1006,7 @@ Panel {
       root.showSetup = false
       root.setupStatus = ""
       root.closeWorkerDetail()
+      root.closeTunnelDetail()
       root.closeAccountView()
       // The bar dot reads its error rate from whichever window is loaded, and
       // the background poll keeps loading whatever was left selected. Leaving
@@ -1000,6 +1058,15 @@ Panel {
       root.open()
       root.openWorkerDetail(name)
       return name
+    }
+    function tunnel(name: string): string {
+      if (!name) { root.closeTunnelDetail(); return "closed" }
+      var t = root.tunnelByName(name)
+      if (!t) return "no tunnel called " + name
+      root.open()
+      root.openAccountView()
+      root.openTunnelDetail(t.id)
+      return t.name
     }
     function zone(): string { return root.zone ? root.zone.name : "" }
     function status(): string {
@@ -1142,6 +1209,7 @@ Panel {
     contentHeight: panel.fittedContentHeight(
                      root.setupVisible ? setupContent.implicitHeight
                      : root.workerDetailVisible ? workerContent.implicitHeight
+                     : root.tunnelDetailVisible ? tunnelContent.implicitHeight
                      : root.accountViewVisible ? accountContent.implicitHeight
                      : column.implicitHeight)
 
@@ -1174,7 +1242,9 @@ Panel {
         // Backing out of a Worker that has not opened yet is backing out of
         // asking for it, not out of the screen underneath.
         else if (root.pendingWorker !== "") root.pendingWorker = ""
+        else if (root.pendingTunnel !== "") root.pendingTunnel = ""
         else if (root.workerDetailVisible) root.closeWorkerDetail()
+        else if (root.tunnelDetailVisible) root.closeTunnelDetail()
         else if (root.accountViewVisible) root.closeAccountView()
         // Escape backs out of the setup screen, unless backing out would leave
         // nothing behind it.
@@ -1194,7 +1264,7 @@ Panel {
           root.showSetup ? root.closeSetup() : root.openSetup()
           return
         }
-        if (root.setupVisible || root.workerDetailVisible) return
+        if (root.setupVisible || root.workerDetailVisible || root.tunnelDetailVisible) return
         // The account screen is a place, not a mode: `a` opens it and Escape
         // leaves, the same way a Worker does.
         if (key === "a") {
@@ -2318,6 +2388,70 @@ Panel {
               }
             }
 
+          // The account at a glance, in the shape the zone view opens with:
+          // three figures, then the lists they summarise. Without it this
+          // screen went straight into small type and read as a list rather
+          // than a place. Everything here is summed from rows already loaded.
+          Row {
+            id: accountSummary
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            readonly property int up: {
+              var n = 0
+              for (var i = 0; i < root.tunnels.length; i++) {
+                var st = String(root.tunnels[i].status || "")
+                if (st === "healthy" || st === "degraded") n++
+              }
+              return n
+            }
+            readonly property bool metered: {
+              for (var i = 0; i < root.workers.length; i++)
+                if (root.workers[i].requests !== undefined && root.workers[i].requests !== null)
+                  return true
+              return false
+            }
+            readonly property real requests: {
+              var n = 0
+              for (var i = 0; i < root.workers.length; i++) n += Number(root.workers[i].requests || 0)
+              return n
+            }
+            readonly property real errors: {
+              var n = 0
+              for (var i = 0; i < root.workers.length; i++) n += Number(root.workers[i].errors || 0)
+              return n
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 2) / 3
+              value: root.tunnels.length > 0
+                     ? accountSummary.up + "/" + root.tunnels.length : "—"
+              label: "tunnels up"
+              valueColor: root.troubledTunnels > 0 ? Color.urgent : root.foreground
+            }
+
+            Stat {
+              width: (parent.width - Style.spacing.sm * 2) / 3
+              value: accountSummary.metered ? root.compact(accountSummary.requests) : "—"
+              label: "Worker requests"
+              delta: accountSummary.metered ? "last 24h" : ""
+            }
+
+            // Coloured by the line the Workers list already draws: amber for
+            // any failure, red once more than the threshold of requests fail.
+            Stat {
+              width: (parent.width - Style.spacing.sm * 2) / 3
+              value: accountSummary.metered ? root.compact(accountSummary.errors) : "—"
+              label: "errors"
+              delta: accountSummary.metered && accountSummary.requests > 0
+                     ? root.percentExact(accountSummary.errors / accountSummary.requests) + " of requests"
+                     : ""
+              valueColor: !accountSummary.metered || accountSummary.errors === 0 ? root.foreground
+                        : accountSummary.errors / Math.max(1, accountSummary.requests) > root.errorThreshold
+                          ? Color.urgent : root.brand
+            }
+          }
+
           // ---- tunnels ----------------------------------------------------
           PanelSectionHeader {
             width: parent.width
@@ -2348,14 +2482,15 @@ Panel {
                 width: parent.width
                 height: Style.space(40)
                 radius: Style.cornerRadius / 2
-                color: tunnelHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+                color: tunnelHover.containsMouse || root.pendingTunnel === modelData.id
+                       ? Color.menu.selectedBackground : "transparent"
 
                 MouseArea {
                   id: tunnelHover
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openTunnelsDashboard()
+                  onClicked: root.openTunnelDetail(parent.modelData.id)
                 }
 
                 Rectangle {
@@ -2392,21 +2527,22 @@ Panel {
                   anchors.verticalCenter: tunnelName.verticalCenter
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  color: root.foreground
-                  opacity: 0.55
+                  // Quiet when it is up, in the dot's colour when it is not:
+                  // the dot alone is a few pixels, and the words are the part
+                  // that has to carry "down" for anyone who cannot see it.
+                  readonly property string status: String(parent.modelData.status || "")
+                  color: status === "down" ? Color.urgent
+                       : status === "degraded" ? root.brand : root.foreground
+                  opacity: status === "down" || status === "degraded" ? 1.0 : 0.55
                   textFormat: Text.PlainText
                   // How long the status has held says more than the status
                   // alone: down for twelve minutes is a blip in progress,
                   // down for a week is a tunnel nobody has noticed. The
-                  // count is live connections — four when whole — and a
-                  // tunnel short of four already says so as "degraded".
+                  // count is live connections — four to a whole cloudflared —
+                  // and a tunnel short of that already says so as "degraded".
                   text: {
-                    var t = parent.modelData
-                    var status = String(t.status || "")
-                    var held = root.span(t.since)
-                    var n = Number(t.connections || 0)
-                    return status + (held !== "" ? " for " + held : "")
-                           + (n > 0 ? "  ·  " + n + " conn" : "")
+                    var n = Number(parent.modelData.connections || 0)
+                    return root.tunnelState(parent.modelData) + (n > 0 ? "  ·  " + n + " conn" : "")
                   }
                 }
 
@@ -2419,7 +2555,9 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.foreground
-                  opacity: 0.45
+                  // Brighter than a route's pattern: on this row it is the
+                  // answer to what breaks, not a footnote.
+                  opacity: 0.6
                   elide: Text.ElideRight
                   textFormat: Text.PlainText
                   text: root.tunnelRoutes(parent.modelData)
@@ -2467,10 +2605,13 @@ Panel {
               // lately" list, not a directory.
               model: root.rankedWorkers
 
+              // The same shape as a tunnel row above it — dot, name and the
+              // figures that can be bad news on one line, the rest under it —
+              // so the two lists read as one screen rather than two designs.
               delegate: Rectangle {
                 required property var modelData
                 width: parent.width
-                height: Style.space(24)
+                height: Style.space(40)
                 radius: Style.cornerRadius / 2
                 color: workerHover.containsMouse || root.pendingWorker === modelData.name
                        ? Color.menu.selectedBackground : "transparent"
@@ -2483,12 +2624,29 @@ Panel {
                   onClicked: root.openWorkerDetail(parent.modelData.name)
                 }
 
-                Text {
+                // Filled by the colour rule the error count uses; hollow for
+                // a Worker nothing called, which has no health to report.
+                Rectangle {
+                  id: workerDot
                   anchors.left: parent.left
                   anchors.leftMargin: Style.spacing.rowPaddingX
+                  anchors.verticalCenter: workerName.verticalCenter
+                  width: Style.space(6)
+                  height: width
+                  radius: width / 2
+                  color: root.workerDotColor(parent.modelData)
+                  border.width: workerMeta.idle ? 1 : 0
+                  border.color: root.dim
+                }
+
+                Text {
+                  id: workerName
+                  anchors.left: workerDot.right
+                  anchors.leftMargin: Style.spacing.sm
                   anchors.right: workerMeta.left
                   anchors.rightMargin: Style.spacing.sm
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.top: parent.top
+                  anchors.topMargin: Style.space(4)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   color: root.foreground
@@ -2504,7 +2662,7 @@ Panel {
                   id: workerMeta
                   anchors.right: parent.right
                   anchors.rightMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.verticalCenter: workerName.verticalCenter
                   spacing: 0
 
                   readonly property var w: parent.modelData
@@ -2523,9 +2681,7 @@ Panel {
                     color: root.foreground
                     opacity: 0.5
                     textFormat: Text.PlainText
-                    text: workerMeta.idle
-                          ? root.ago(workerMeta.w && workerMeta.w.modified_on)
-                          : root.compact(workerMeta.w.requests) + " req"
+                    text: workerMeta.idle ? "idle" : root.compact(workerMeta.w.requests) + " req"
                   }
 
                   Text {
@@ -2552,14 +2708,28 @@ Panel {
                     text: root.compact(workerMeta.errs) + " err"
                   }
 
-                  Text {
-                    visible: !workerMeta.idle && workerMeta.cpu !== ""
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: root.foreground
-                    opacity: 0.5
-                    textFormat: Text.PlainText
-                    text: "  ·  " + workerMeta.cpu
+                }
+
+                // What it costs to run and how fresh it is: the figures that
+                // are never the bad news, so they move off the first line.
+                Text {
+                  anchors.left: workerName.left
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.top: workerName.bottom
+                  anchors.topMargin: Style.space(2)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  opacity: 0.45
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  text: {
+                    var bits = []
+                    if (!workerMeta.idle && workerMeta.cpu !== "") bits.push(workerMeta.cpu + " p50")
+                    var deployed = root.ago(parent.modelData.modified_on)
+                    if (deployed !== "") bits.push("deployed " + deployed)
+                    return bits.join("  ·  ")
                   }
                 }
               }
@@ -2579,6 +2749,397 @@ Panel {
             textFormat: Text.PlainText
             text: "Showing deploy dates — Workers traffic needs Account → Account Analytics → Read."
           }
+          }
+        }
+      }
+
+      // ---- one tunnel ---------------------------------------------------
+      // A map of the tunnel rather than a chart of it: Cloudflare keeps no
+      // traffic figures for a tunnel as such, and a graph drawn from anything
+      // else would be a guess. What it does know is what each hostname routes
+      // to, which machines run the tunnel and where they connect — which is
+      // what you want the moment it goes down.
+      Rectangle {
+        id: tunnelView
+        anchors.fill: parent
+        z: 14
+        visible: root.tunnelDetailVisible
+        color: Color.popups.background
+
+        readonly property var detail: root.tunnelDetail
+        readonly property var info: tunnelView.detail ? tunnelView.detail.tunnel : null
+        readonly property string failure: tunnelView.detail ? String(tunnelView.detail.error || "") : ""
+        readonly property var routes: tunnelView.detail ? tunnelView.detail.routes : null
+        readonly property var connectors: tunnelView.detail ? tunnelView.detail.connectors : null
+        readonly property var networks: tunnelView.detail && tunnelView.detail.networks
+                                        ? tunnelView.detail.networks : []
+        readonly property string status: tunnelView.info ? String(tunnelView.info.status || "") : ""
+
+        MouseArea { anchors.fill: parent; hoverEnabled: true }
+
+        Flickable {
+          id: tunnelFlick
+          anchors.fill: parent
+          contentWidth: width
+          contentHeight: tunnelContent.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Column {
+            id: tunnelContent
+            width: tunnelFlick.width
+            spacing: Style.space(10)
+
+            Item {
+              width: parent.width
+              height: Math.max(tunnelBack.height, tunnelTitle.implicitHeight, tunnelOpen.height)
+
+              PanelActionButton {
+                id: tunnelBack
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰁍"
+                tooltipText: "Back (Esc)"
+                foreground: root.foreground
+                onClicked: root.closeTunnelDetail()
+              }
+
+              Text {
+                id: tunnelTitle
+                anchors.left: tunnelBack.right
+                anchors.leftMargin: Style.spacing.sm
+                anchors.right: tunnelOpen.left
+                anchors.rightMargin: Style.spacing.sm
+                anchors.verticalCenter: parent.verticalCenter
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle
+                color: root.foreground
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                text: tunnelView.info ? tunnelView.info.name : ""
+              }
+
+              Button {
+                id: tunnelOpen
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Dashboard"
+                tooltipText: "Tunnels on the Zero Trust dashboard"
+                foreground: root.foreground
+                onClicked: root.openTunnelsDashboard()
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: tunnelView.failure !== ""
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: root.foreground
+              opacity: 0.55
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: tunnelView.failure
+            }
+
+            // The same three-figure opening the zone and a Worker have. The
+            // status takes the first slot in its own colour, with how long it
+            // has held under it, because that pair is the headline.
+            Row {
+              width: parent.width
+              visible: tunnelView.info !== null
+              spacing: Style.spacing.sm
+
+              Stat {
+                width: (parent.width - Style.spacing.sm * 2) / 3
+                value: tunnelView.status === "inactive" ? "never run" : tunnelView.status
+                label: tunnelView.info && root.span(tunnelView.info.since) !== ""
+                       ? "for " + root.span(tunnelView.info.since) : "status"
+                valueColor: root.tunnelColor(tunnelView.status)
+              }
+
+              Stat {
+                width: (parent.width - Style.spacing.sm * 2) / 3
+                value: tunnelView.connectors !== null ? String(tunnelView.connectors.length) : "—"
+                label: tunnelView.connectors !== null && tunnelView.connectors.length === 1
+                       ? "connector" : "connectors"
+              }
+
+              Stat {
+                width: (parent.width - Style.spacing.sm * 2) / 3
+                value: tunnelView.info ? String(tunnelView.info.connections || 0) : "—"
+                label: "connections"
+                // Four to a whole cloudflared. Short of that is what makes
+                // Cloudflare call it degraded, so the arithmetic is shown —
+                // then, and only then; "8 of 8" is a sum nobody asked for.
+                readonly property int whole: tunnelView.connectors !== null
+                                             ? tunnelView.connectors.length * 4 : 0
+                delta: whole > 0 && Number(tunnelView.info ? tunnelView.info.connections : 0) < whole
+                       ? "of " + whole : ""
+              }
+            }
+
+            // ---- routes ---------------------------------------------------
+            PanelSeparator { width: parent.width; foreground: root.foreground }
+
+            PanelSectionHeader {
+              width: parent.width
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              textFormat: Text.PlainText
+              text: tunnelView.routes !== null ? "ROUTES  ·  " + tunnelView.routes.length : "ROUTES"
+            }
+
+            // In the order cloudflared matches them, the catch-all last:
+            // "everything else" is a route too, and usually a 404.
+            Column {
+              width: parent.width
+              visible: tunnelView.routes !== null && tunnelView.routes.length > 0
+              spacing: 0
+
+              Repeater {
+                model: tunnelView.routes || []
+
+                delegate: Item {
+                  required property var modelData
+                  width: parent.width
+                  height: Style.space(22)
+                  readonly property bool catchAll: String(modelData.hostname || "") === ""
+
+                  Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.rowPaddingX
+                    anchors.right: routeTo.left
+                    anchors.rightMargin: Style.spacing.sm
+                    anchors.verticalCenter: parent.verticalCenter
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: parent.catchAll ? 0.45 : 1.0
+                    elide: Text.ElideMiddle
+                    textFormat: Text.PlainText
+                    text: parent.catchAll ? "everything else"
+                          : parent.modelData.hostname + String(parent.modelData.path || "")
+                  }
+
+                  // Only cloudflared's own Access check shows here. An Access
+                  // application in front of the hostname is set up elsewhere
+                  // and is not in the tunnel's config to read.
+                  Text {
+                    id: routeTo
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.spacing.rowPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth, parent.width * 0.5)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.55
+                    elide: Text.ElideLeft
+                    textFormat: Text.PlainText
+                    text: "→ " + root.routeTarget(parent.modelData.service)
+                          + (parent.modelData.access ? "  " : "")
+                  }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: tunnelView.info !== null
+                       && (tunnelView.routes === null || tunnelView.routes.length === 0)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: root.foreground
+              opacity: 0.55
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: tunnelView.info && tunnelView.info.config === "local"
+                    ? "Managed from cloudflared's config file on the host, so its routes are not in Cloudflare to read."
+                    : tunnelView.detail && tunnelView.detail.routes_error
+                      ? tunnelView.detail.routes_error
+                      : "No public hostnames."
+            }
+
+            // ---- connectors -----------------------------------------------
+            PanelSeparator { width: parent.width; foreground: root.foreground }
+
+            PanelSectionHeader {
+              width: parent.width
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              textFormat: Text.PlainText
+              text: tunnelView.connectors !== null
+                    ? "CONNECTORS  ·  " + tunnelView.connectors.length : "CONNECTORS"
+            }
+
+            // One per running cloudflared. The API names no machine, so the
+            // address each one dials out from is what tells them apart. The
+            // chips are its connections by data centre — one machine landing
+            // in two places, or two machines, reads at a glance as how much
+            // this tunnel could lose and keep serving.
+            Column {
+              width: parent.width
+              visible: tunnelView.connectors !== null && tunnelView.connectors.length > 0
+              spacing: 0
+
+              Repeater {
+                model: tunnelView.connectors || []
+
+                delegate: Item {
+                  required property var modelData
+                  width: parent.width
+                  height: Style.space(46)
+
+                  Text {
+                    id: connectorName
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.rowPaddingX
+                    anchors.right: connectorMeta.left
+                    anchors.rightMargin: Style.spacing.sm
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(4)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    color: root.foreground
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText
+                    text: String(parent.modelData.origin_ip || "")
+                          || String(parent.modelData.id || "").slice(0, 8)
+                  }
+
+                  Text {
+                    id: connectorMeta
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.spacing.rowPaddingX
+                    anchors.verticalCenter: connectorName.verticalCenter
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.55
+                    textFormat: Text.PlainText
+                    text: {
+                      var c = parent.modelData
+                      var bits = []
+                      if (c.version) bits.push(c.version)
+                      if (c.arch) bits.push(String(c.arch).replace(/^linux_/, ""))
+                      var up = root.span(c.run_at)
+                      if (up !== "") bits.push("up " + up)
+                      return bits.join("  ·  ")
+                    }
+                  }
+
+                  Row {
+                    anchors.left: connectorName.left
+                    anchors.top: connectorName.bottom
+                    anchors.topMargin: Style.space(4)
+                    spacing: Style.space(4)
+
+                    Repeater {
+                      model: parent.parent.modelData.colos || []
+
+                      delegate: Rectangle {
+                        required property var modelData
+                        width: coloLabel.implicitWidth + Style.space(10)
+                        height: coloLabel.implicitHeight + Style.space(4)
+                        radius: Style.cornerRadius / 2
+                        color: "transparent"
+                        border.width: 1
+                        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+
+                        Text {
+                          id: coloLabel
+                          anchors.centerIn: parent
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          color: root.foreground
+                          opacity: 0.8
+                          textFormat: Text.PlainText
+                          // "fra08" is Frankfurt's eighth; the city is the part
+                          // that means something.
+                          text: String(parent.modelData || "").replace(/[0-9]+$/, "").toUpperCase()
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: tunnelView.info !== null
+                       && (tunnelView.connectors === null || tunnelView.connectors.length === 0)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: root.foreground
+              opacity: 0.55
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: tunnelView.connectors === null
+                    ? String(tunnelView.detail && tunnelView.detail.connectors_error || "")
+                    : "No cloudflared is running this tunnel."
+            }
+
+            // ---- private networks -----------------------------------------
+            // Only when there are any: most tunnels publish hostnames and
+            // route no network, and an empty section for that is noise.
+            PanelSeparator {
+              width: parent.width
+              visible: tunnelView.networks.length > 0
+              foreground: root.foreground
+            }
+
+            PanelSectionHeader {
+              width: parent.width
+              visible: tunnelView.networks.length > 0
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              textFormat: Text.PlainText
+              text: "PRIVATE NETWORKS  ·  " + tunnelView.networks.length
+            }
+
+            Column {
+              width: parent.width
+              visible: tunnelView.networks.length > 0
+              spacing: 0
+
+              Repeater {
+                model: tunnelView.networks
+
+                delegate: Item {
+                  required property var modelData
+                  width: parent.width
+                  height: Style.space(22)
+
+                  Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.rowPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    textFormat: Text.PlainText
+                    text: String(parent.modelData.network || "")
+                  }
+
+                  Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.spacing.rowPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    color: root.foreground
+                    opacity: 0.55
+                    textFormat: Text.PlainText
+                    text: String(parent.modelData.comment || parent.modelData.virtual_network || "")
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -174,6 +174,14 @@ than 5% of its invocations fail — the same line the bar icon draws for a zone'
 5xx rate. Only the error count is coloured: ten failures in two and a half
 thousand is worth seeing and is not the same news as twelve out of twelve.
 
+The screen opens the way the zone does, with three figures — tunnels up,
+Worker requests over the last day, and errors with their share of those
+requests — each summed from the rows below it, so they cost no request of
+their own. Every row below has the same shape: a dot, the name and whatever
+could be bad news on the first line, the rest underneath. A Worker's dot takes
+the colour its error count would; a Worker nothing called is hollow, because it
+has no health to report.
+
 **Workers on this zone** — the scripts answering for the domain in the picker,
 each with how it is doing and the pattern it serves. This is the one Workers
 question that is genuinely zone-scoped: it changes when you change zones,
@@ -256,10 +264,10 @@ the moment it is raised. If the plugin has no record, it falls back to `medium`.
 has held it, its live connections, and what it serves.
 
 ```
-● homelab                     healthy for 3d  ·  4 conn
-  grafana, nas, ssh  ·  example.com
-● staging                             down for 12m
+● staging                                   down 12m
   routes kept on the host
+● homelab                          up 3d  ·  8 conn
+  grafana, nas, ssh  ·  example.com
 ```
 
 How long matters more than the word: down for twelve minutes is a blip in
@@ -273,6 +281,33 @@ managed tunnel keeps in Cloudflare — one more request per tunnel, cached with
 the list. A locally managed tunnel keeps its routes in `cloudflared`'s own
 config file and says so. Routes that exist but cannot be read say that too,
 rather than passing for a tunnel that serves nothing.
+
+**Click a tunnel** and it gets the whole screen, the way a Worker does:
+
+![One tunnel in detail](tunnel.png)
+
+There is no graph, because there is nothing honest to draw one from:
+Cloudflare keeps no traffic figures for a tunnel as such. What it does know is
+the tunnel's shape, which is what you want the moment it goes down.
+
+- **Routes** — every ingress rule in the order `cloudflared` matches them, each
+  hostname and path with where it forwards, and "everything else" last, since
+  the catch-all is a route too. The lock marks a route on which `cloudflared`
+  checks the request's Access token itself; an Access application set up in
+  front of the hostname is configured elsewhere and does not show here.
+- **Connectors** — one per running `cloudflared`, with its version,
+  architecture and how long it has run. The API names no machine, so the
+  address each one dials out from is what tells them apart. The chips are its
+  live connections by data centre: one machine landing in two places, or two
+  machines, reads at a glance as how much the tunnel could lose and keep
+  serving.
+- **Private networks** — the address ranges routed through the tunnel for WARP
+  clients, when there are any.
+
+It is four requests, made side by side when you open it, each failing on its
+own: a credential that may read the tunnel but not its routes still shows the
+tunnel. The one tunnel endpoint the plugin never calls is `/token`, which
+returns the secret a machine uses to run the tunnel.
 
 **Workers** — every script on the account, with 24h invocations, errors and
 p50 CPU time:
@@ -361,6 +396,7 @@ printf '%s\n' TOKEN | ./bin/cloudflarechy save-token   # checked, then saved 600
 ./bin/cloudflarechy tunnels <account-id>
 ./bin/cloudflarechy workers <account-id>
 ./bin/cloudflarechy worker  <account-id> <script>
+./bin/cloudflarechy tunnel  <account-id> <tunnel-id>
 ./bin/cloudflarechy devmode <zone-id> on|off
 ./bin/cloudflarechy attack  <zone-id> on|off
 ./bin/cloudflarechy purge   <zone-id>
@@ -377,6 +413,7 @@ The running widget answers over IPC too:
 omarchy-shell cloudflarechy status     # one line: zone, dev mode, attack, tunnels
 omarchy-shell cloudflarechy refresh
 omarchy-shell cloudflarechy worker <script>    # open that Worker's detail view
+omarchy-shell cloudflarechy tunnel <name>      # open that tunnel's detail view
 omarchy-shell cloudflarechy toggle
 ```
 
@@ -386,7 +423,7 @@ omarchy-shell cloudflarechy toggle
 ./tests/run.sh
 ```
 
-140 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
+178 contract tests over `bin/cloudflarechy`, run against `tests/mock-api.py` —
 a stand-in shaped like the real API. They pin the things that are easy to break
 without noticing: the write guard, the security-level save *and* its fallback,
 the analytics query giving up one optional field at a time, 4xx never being
@@ -406,12 +443,12 @@ covers the script, not the QML: the panel is still verified by looking at it.
 ## Screenshots and the demo
 
 ```bash
-./tests/capture.sh     # the four images above
+./tests/capture.sh     # the five images above
 ./tests/demo.sh            # a ~20s recording, demo.mp4
 ./tests/demo.sh --social   # a ~19s cut for a feed, demo-social.mp4
 ```
 
-Regenerates the three images above against the mock, so the README shows the
+Regenerates the five images above against the mock, so the README shows the
 panel as it is rather than as it was several releases ago. It stands up
 `tests/mock-api.py`, points the plugin at it, takes the pictures on an empty
 workspace, and puts everything back — your token is moved aside and returned,

@@ -14,6 +14,7 @@
 #   cloudflarechy zones
 #   cloudflarechy overview <zone-id> [24h|7d|30d]
 #   cloudflarechy tunnels <account-id>
+#   cloudflarechy tunnel  <account-id> <tunnel-id>
 #   cloudflarechy workers <account-id>
 #   cloudflarechy worker  <account-id> <script>
 #   cloudflarechy devmode <zone-id> on|off
@@ -708,6 +709,110 @@ cmd_tunnels() {
   }' <<<"$listed" | cache_and_print "tunnels.$account.json"
 }
 
+# One tunnel, laid out: what it routes where, which machines run it and where
+# they connect, and any private networks behind it. Four reads, side by side,
+# each reporting its own refusal — a token that may read the tunnel but not
+# its routes should still show the tunnel.
+#
+# There is no traffic figure here to draw. Cloudflare offers no analytics for
+# a tunnel as such, so this is a map of one, not a chart.
+#
+# Deliberately never read: /cfd_tunnel/{id}/token, which is the secret a
+# machine uses to run the tunnel. Nothing here needs it.
+cmd_tunnel() {
+  local account="${1:-}" tunnel="${2:-}"
+  [[ -n $account ]] || die "tunnel needs an account id"
+  [[ -n $tunnel ]] || die "tunnel needs a tunnel id"
+  require_token
+
+  local cached
+  if cached=$(cache_read "tunnel.$account.$tunnel.json" 60); then printf '%s\n' "$cached"; return; fi
+
+  local dir
+  dir=$(mktemp -d) || die "could not make a temporary directory"
+  api GET "/accounts/$account/cfd_tunnel/$tunnel" > "$dir/tunnel" &
+  api GET "/accounts/$account/cfd_tunnel/$tunnel/configurations" > "$dir/config" &
+  api GET "/accounts/$account/cfd_tunnel/$tunnel/connections" > "$dir/connections" &
+  api GET "/accounts/$account/teamnet/routes?tunnel_id=$tunnel&is_deleted=false&per_page=50" \
+    > "$dir/networks" &
+  wait
+
+  local raw err
+  raw=$(<"$dir/tunnel")
+  err=$(api_error "$raw")
+  if [[ -n $err ]]; then
+    rm -rf "$dir"
+    "$JQ" -n --arg e "$err" '{error: $e, hint: "The token needs Account → Cloudflare Tunnel → Read."}'
+    return
+  fi
+
+  local cfg conns nets cfg_err conns_err nets_err
+  cfg=$(<"$dir/config"); conns=$(<"$dir/connections"); nets=$(<"$dir/networks")
+  rm -rf "$dir"
+  cfg_err=$(api_error "$cfg"); conns_err=$(api_error "$conns"); nets_err=$(api_error "$nets")
+  [[ -n $cfg_err ]] && cfg='{}'
+  [[ -n $conns_err ]] && conns='{}'
+  [[ -n $nets_err ]] && nets='{}'
+
+  # Routes: every ingress rule in the order cloudflared matches them, the
+  # hostless catch-all included — it is where everything else goes. `access`
+  # is cloudflared checking each request's Access token before forwarding it;
+  # an Access application in front of the hostname is separate, and not
+  # visible from here.
+  #
+  # Connectors: one per running cloudflared. The API names no machine, so the
+  # origin IP a connector dials out from is what tells two apart. Its
+  # connections are the live ones, by data centre.
+  "$JQ" -n \
+    --argjson t "$raw" --argjson c "$cfg" --argjson k "$conns" --argjson n "$nets" \
+    --arg cfg_err "$cfg_err" --arg conns_err "$conns_err" --arg nets_err "$nets_err" '
+    ($t.result // {}) as $r
+    | ($r.config_src == "cloudflare" or $r.remote_config == true) as $remote
+    | {
+        tunnel: {
+          id:          ($r.id // ""),
+          name:        ($r.name // ""),
+          status:      ($r.status // "inactive"),
+          since:       (if $r.status == "healthy" or $r.status == "degraded"
+                        then ($r.conns_active_at // "") else ($r.conns_inactive_at // "") end),
+          config:      (if $remote then "remote" else "local" end),
+          connections: ([($r.connections // [])[] | select(.is_pending_reconnect != true)] | length),
+          created_at:  ($r.created_at // "")
+        },
+        routes: (if $remote and $cfg_err == "" then
+                   [ ($c.result.config.ingress // [])[] | {
+                       hostname: (.hostname // ""),
+                       path:     (.path // ""),
+                       service:  (.service // ""),
+                       access:   (.originRequest.access != null)
+                     } ]
+                 else null end),
+        routes_error: (if $remote then $cfg_err else "" end),
+        warp_routing: ($c.result.config["warp-routing"].enabled // false),
+        connectors: (if $conns_err == "" then
+                       [ ($k.result // [])[] |
+                         ([(.conns // [])[] | select(.is_pending_reconnect != true)]) as $live
+                         | {
+                             id:          (.id // ""),
+                             arch:        (.arch // ""),
+                             version:     (.version // ($live[0].client_version // "")),
+                             run_at:      (.run_at // ""),
+                             origin_ip:   ((.conns // [])[0].origin_ip // ""),
+                             colos:       [ $live[] | .colo_name // "" ]
+                           } ]
+                     else null end),
+        connectors_error: $conns_err,
+        networks: (if $nets_err == "" then
+                     [ ($n.result // [])[] | {
+                         network: (.network // ""),
+                         comment: (.comment // ""),
+                         virtual_network: (.virtual_network_name // "")
+                       } ]
+                   else null end),
+        networks_error: $nets_err
+      }' | cache_and_print "tunnel.$account.$tunnel.json"
+}
+
 cmd_workers() {
   local account="${1:-}"
   [[ -n $account ]] || die "workers needs an account id"
@@ -1108,6 +1213,7 @@ case "${1:-status}" in
   zones)    cmd_zones ;;
   overview) shift; cmd_overview "$@" ;;
   tunnels)  shift; cmd_tunnels "$@" ;;
+  tunnel)   shift; cmd_tunnel "$@" ;;
   workers)  shift; cmd_workers "$@" ;;
   worker)   shift; cmd_worker "$@" ;;
   devmode)  shift; cmd_devmode "$@" ;;
