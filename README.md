@@ -252,8 +252,27 @@ Turning Under Attack *off* restores the security level that was in force before
 it was turned on — that level is recorded in `~/.local/state/cloudflarechy/` at
 the moment it is raised. If the plugin has no record, it falls back to `medium`.
 
-**Tunnels** — every `cfd_tunnel` on the account, its status and its connection
-count, which is what separates "healthy" from "healthy, on one leg".
+**Tunnels** — every `cfd_tunnel` on the account: its status and how long it
+has held it, its live connections, and what it serves.
+
+```
+● homelab                     healthy for 3d  ·  4 conn
+  grafana, nas, ssh  ·  example.com
+● staging                             down for 12m
+  routes kept on the host
+```
+
+How long matters more than the word: down for twelve minutes is a blip in
+progress, down for a week is a tunnel nobody noticed. The connections are the
+live ones — a whole `cloudflared` holds four, and one short of that is what
+Cloudflare calls `degraded`, which already colours the row. Cloudflare keeps a
+dropped connection listed for several minutes afterwards; it is not counted.
+
+What it serves comes from the tunnel's ingress rules, which only a remotely
+managed tunnel keeps in Cloudflare — one more request per tunnel, cached with
+the list. A locally managed tunnel keeps its routes in `cloudflared`'s own
+config file and says so. Routes that exist but cannot be read say that too,
+rather than passing for a tunnel that serves nothing.
 
 **Workers** — every script on the account, with 24h invocations, errors and
 p50 CPU time:

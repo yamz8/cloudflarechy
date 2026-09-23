@@ -128,7 +128,12 @@ capture() {
   (( w > 200 && w < screen_w / 2 && h > 200 )) ||
     die "that does not look like the panel: ${w}x${h} — did something move behind it?"
 
-  magick "$SHOT_DIR/open.png" -crop "${w}x${h}+${x}+${y}" +repage "$ROOT/$out"
+  # Kept aside until every picture is taken. The shell watches the plugin's
+  # directory and reloads the plugin whenever a file in it changes, so a
+  # picture written there mid-run reloads the widget under the next one —
+  # every run then failed on its second picture.
+  mkdir -p "$SHOT_DIR/out"
+  magick "$SHOT_DIR/open.png" -crop "${w}x${h}+${x}+${y}" +repage "$SHOT_DIR/out/$out"
   note "$out  ${w}x${h}"
 }
 
@@ -142,6 +147,7 @@ capture preview.png open_panel
 capture account.png open_account
 capture connect.png open_credentials
 capture worker.png  open_worker
+cp "$SHOT_DIR"/out/*.png "$ROOT"/
 
 echo
 echo "done — check them before committing; the panel is example.com, never yours"

@@ -341,14 +341,63 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(ok({"id": "security_level",
                                   "value": STATE["security_level"]}))
         if path == f"/accounts/{ACCOUNT}/cfd_tunnel":
+            now = datetime.datetime.now(datetime.timezone.utc)
+            stamp = lambda **ago: (now - datetime.timedelta(**ago)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            live = {"colo_name": "fra08", "is_pending_reconnect": False}
             return self.reply(ok([
+                # A healthy cloudflared holds four connections. The fifth
+                # dropped a minute ago and Cloudflare is still listing it,
+                # flagged — the count has to leave it out.
                 {"id": "t1", "name": "homelab", "status": "healthy",
-                 "connections": [{}, {}], "created_at": "2026-01-02T03:04:05Z"},
+                 "config_src": "cloudflare", "remote_config": True,
+                 "connections": [live] * 4 + [
+                     {"colo_name": "ams01", "is_pending_reconnect": True}],
+                 "conns_active_at": stamp(days=3, hours=2),
+                 "conns_inactive_at": None,
+                 "created_at": "2026-01-02T03:04:05Z"},
+                # Managed from cloudflared's own config file, so its routes
+                # are nowhere the API can read them.
+                # The showcase manages it remotely too, so both rows have
+                # something to say about what they serve.
                 {"id": "t2", "name": "staging",
                  "status": "healthy" if CALM else "down",
-                 "connections": [{}] if CALM else [],
+                 "config_src": "cloudflare" if SHOWCASE else "local",
+                 "remote_config": SHOWCASE,
+                 "connections": [live] * 4 if CALM else [],
+                 "conns_active_at": stamp(days=9) if CALM else None,
+                 "conns_inactive_at": None if CALM else stamp(minutes=12),
                  "created_at": "2026-02-02T03:04:05Z"},
             ]))
+        if path == f"/accounts/{ACCOUNT_NO_METRICS}/cfd_tunnel":
+            # Remotely managed, but its routes are refused: the case where a
+            # tunnel has hostnames nobody here is allowed to see.
+            return self.reply(ok([
+                {"id": "t9", "name": "edge", "status": "healthy",
+                 "config_src": "cloudflare", "remote_config": True,
+                 "connections": [{"is_pending_reconnect": False}] * 4,
+                 "conns_active_at": "2026-01-01T00:00:00Z",
+                 "created_at": "2026-01-01T00:00:00Z"}]))
+        if path == f"/accounts/{ACCOUNT_NO_METRICS}/cfd_tunnel/t9/configurations":
+            return self.reply(denied(), 403)
+        if SHOWCASE and path == f"/accounts/{ACCOUNT}/cfd_tunnel/t2/configurations":
+            return self.reply(ok({"tunnel_id": "t2", "source": "cloudflare", "config": {
+                "ingress": [
+                    {"hostname": "staging.example.com", "service": "http://localhost:8080"},
+                    {"hostname": "preview.example.com", "service": "http://localhost:8081"},
+                    {"service": "http_status:404"},
+                ]}}))
+        if path == f"/accounts/{ACCOUNT}/cfd_tunnel/t1/configurations":
+            # Two paths on one hostname, and the catch-all last with none.
+            return self.reply(ok({"tunnel_id": "t1", "source": "cloudflare", "config": {
+                "ingress": [
+                    {"hostname": "grafana.example.com", "service": "http://localhost:3000"},
+                    {"hostname": "nas.example.com", "path": "/api/*",
+                     "service": "http://localhost:5001"},
+                    {"hostname": "nas.example.com", "service": "http://localhost:5000"},
+                    {"hostname": "ssh.example.com", "service": "ssh://localhost:22"},
+                    {"service": "http_status:404"},
+                ]}}))
         if path in (f"/accounts/{ACCOUNT}/workers/scripts",
                     f"/accounts/{ACCOUNT_NO_METRICS}/workers/scripts"):
             return self.reply(ok([

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Tunnels say what they serve and how long they have been the way they are:
+  `healthy for 3d · 4 conn`, and under the name the public hostnames from
+  the tunnel's ingress rules — `grafana, nas, ssh · example.com`. A locally
+  managed tunnel keeps its routes in `cloudflared`'s config file, out of the
+  API's sight, and says so; routes that exist but cannot be read say that
+  rather than passing for none. One more request per remote tunnel, made side
+  by side and cached with the list.
+- The connection count is live connections. Cloudflare keeps a dropped one
+  listed for several minutes, flagged as reconnecting, and counting it showed
+  a tunnel that had lost a connection as whole. The README had also claimed
+  the count separated healthy from "healthy, on one leg"; a whole
+  `cloudflared` holds four, and one short of that is already `degraded`.
+- `tests/capture.sh` keeps its pictures aside until all four are taken. The
+  shell reloads a plugin when a file in its directory changes, so writing the
+  first picture into the repository reloaded the widget under the second, and
+  every run failed there.
 - Switching the range, the zone or into a Worker no longer empties the panel
   first. It used to drop the view it was leaving the moment you asked, and
   the panel shrank to its header for as long as the answer took, then grew

@@ -283,8 +283,24 @@ assert_eq "  ... leaving the other range alone" "19812" \
 
 out=$(run --fresh tunnels "$ACCOUNT")
 assert_eq "tunnels are listed" "2" "$(field '.tunnels | length' <<<"$out")"
-assert_eq "  ... with connection counts" "2" "$(field '.tunnels[0].connections' <<<"$out")"
 assert_eq "  ... and a status" "down" "$(field '.tunnels[1].status' <<<"$out")"
+assert_eq "  ... counting live connections only" "4" "$(field '.tunnels[0].connections' <<<"$out")"
+assert_eq "  ... which is none for a tunnel that is down" "0" "$(field '.tunnels[1].connections' <<<"$out")"
+assert_eq "a serving tunnel is timed from when it connected" "true" \
+  "$(field '.tunnels[0].since | fromdateiso8601 < (now - 3*86400)' <<<"$out")"
+assert_eq "  ... and a down one from when it went down" "true" \
+  "$(field '.tunnels[1].since | fromdateiso8601 > (now - 3600)' <<<"$out")"
+assert_eq "a remote tunnel lists what it serves" \
+  "grafana.example.com nas.example.com ssh.example.com" \
+  "$(field '.tunnels[0].hostnames | join(" ")' <<<"$out")"
+assert_eq "  ... from its ingress, once each, catch-all left out" "3" \
+  "$(field '.tunnels[0].hostnames | length' <<<"$out")"
+assert_eq "a local tunnel is marked as such" "local" "$(field '.tunnels[1].config' <<<"$out")"
+assert_eq "  ... with no hostnames claimed" "null" "$(field '.tunnels[1].hostnames' <<<"$out")"
+out=$(run --fresh tunnels "$ACCOUNT_NO_METRICS")
+assert_eq "routes that cannot be read are unknown, not empty" "null" \
+  "$(field '.tunnels[0].hostnames' <<<"$out")"
+assert_eq "  ... and the tunnel is still listed" "edge" "$(field '.tunnels[0].name' <<<"$out")"
 
 out=$(run --fresh workers "$ACCOUNT")
 assert_eq "workers are busiest first" "api-router" "$(field '.workers[0].name' <<<"$out")"

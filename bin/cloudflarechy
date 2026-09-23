@@ -651,15 +651,61 @@ cmd_tunnels() {
     return
   fi
   # status is one of inactive / degraded / healthy / down.
-  "$JQ" '{
-    tunnels: [ (.result // [])[] | {
+  #
+  # Connections: Cloudflare keeps a dropped connection listed for several
+  # minutes, flagged is_pending_reconnect. Counting it would show a tunnel
+  # that has lost one of its four as still on four.
+  #
+  # since: how long the status has held, as near as the API says. A tunnel
+  # serving traffic has been since conns_active_at; one that is not, since
+  # conns_inactive_at.
+  #
+  # config: where the tunnel's routes live. Only a remotely managed tunnel
+  # has them in Cloudflare to read; a locally managed one keeps them in
+  # cloudflared's config file on the host, out of the API's sight.
+  local listed
+  listed=$("$JQ" '[ (.result // [])[] | {
       id:          .id,
       name:        (.name // ""),
       status:      (.status // "inactive"),
-      connections: ((.connections // []) | length),
+      connections: ([(.connections // [])[] | select(.is_pending_reconnect != true)] | length),
+      since:       (if .status == "healthy" or .status == "degraded"
+                    then (.conns_active_at // "") else (.conns_inactive_at // "") end),
+      config:      (if .config_src == "cloudflare" or .remote_config == true
+                    then "remote" else "local" end),
       created_at:  (.created_at // "")
-    } ]
-  }' <<<"$raw" | cache_and_print "tunnels.$account.json"
+    } ]' <<<"$raw")
+
+  # What each remote tunnel serves: the public hostnames in its ingress rules,
+  # in the order they match, once each — a hostname can carry several paths.
+  # The last rule is the catch-all and has no hostname. Fetched side by side,
+  # since each is its own request; null where the read failed, so a tunnel
+  # whose routes could not be read is not mistaken for one that has none.
+  local dir id
+  dir=$(mktemp -d) || die "could not make a temporary directory"
+  while read -r id; do
+    [[ -n $id ]] || continue
+    ( cfg=$(api GET "/accounts/$account/cfd_tunnel/$id/configurations")
+      if [[ -z $(api_error "$cfg") ]]; then
+        "$JQ" -c '[ (.result.config.ingress // [])[] | .hostname // empty ]
+                  | reduce .[] as $h ([]; if index([$h]) then . else . + [$h] end)' \
+          <<<"$cfg" > "$dir/$id"
+      else
+        echo null > "$dir/$id"
+      fi ) &
+  done < <("$JQ" -r '.[] | select(.config == "remote") | .id' <<<"$listed")
+  wait
+
+  local hosts='{}'
+  for id in "$dir"/*; do
+    [[ -e $id ]] || continue
+    hosts=$("$JQ" -c --arg id "${id##*/}" --slurpfile h "$id" '. + {($id): $h[0]}' <<<"$hosts")
+  done
+  rm -rf "$dir"
+
+  "$JQ" --argjson hosts "$hosts" '{
+    tunnels: [ .[] | . + {hostnames: (if .config == "remote" then ($hosts[.id] // null) else null end)} ]
+  }' <<<"$listed" | cache_and_print "tunnels.$account.json"
 }
 
 cmd_workers() {

@@ -857,6 +857,40 @@ Panel {
     return n + "s"
   }
 
+  // How long since, bare: "12m", "3h", "9d". For a state that has held since
+  // then, where "ago" would read as a thing that happened once.
+  function span(iso) {
+    if (!iso) return ""
+    var then = new Date(iso)
+    if (isNaN(then.getTime())) return ""
+    var seconds = Math.max(0, (Date.now() - then.getTime()) / 1000)
+    if (seconds < 90) return "a moment"
+    if (seconds < 3600) return Math.round(seconds / 60) + "m"
+    if (seconds < 86400) return Math.round(seconds / 3600) + "h"
+    return Math.round(seconds / 86400) + "d"
+  }
+
+  // What a tunnel serves, on one line. Its hostnames are nearly always
+  // subdomains of one domain, and three of them in full do not fit the
+  // panel — so a shared domain is said once: "grafana, nas, ssh · example.com".
+  function tunnelRoutes(t) {
+    if (!t) return ""
+    if (t.config !== "remote") return "routes kept on the host"
+    if (t.hostnames === null || t.hostnames === undefined) return "routes unreadable"
+    var hosts = t.hostnames
+    if (hosts.length === 0) return "no public hostnames"
+    if (hosts.length === 1) return hosts[0]
+    var first = hosts[0].split(".")
+    var domain = first.slice(1).join(".")
+    if (domain.indexOf(".") < 0) return hosts.join("  ·  ")
+    var labels = []
+    for (var i = 0; i < hosts.length; i++) {
+      if (hosts[i].slice(-(domain.length + 1)) !== "." + domain) return hosts.join("  ·  ")
+      labels.push(hosts[i].slice(0, -(domain.length + 1)))
+    }
+    return labels.join(", ") + "  ·  " + domain
+  }
+
   function ago(iso) {
     if (!iso) return ""
     var then = new Date(iso)
@@ -2305,10 +2339,14 @@ Panel {
             Repeater {
               model: root.rankedTunnels
 
+              // Two lines, like a route: what it is and how it is doing on
+              // one, what it serves under it. The name alone said nothing a
+              // person could act on — "homelab" going down is only news once
+              // you know grafana and ssh go with it.
               delegate: Rectangle {
                 required property var modelData
                 width: parent.width
-                height: Style.space(26)
+                height: Style.space(40)
                 radius: Style.cornerRadius / 2
                 color: tunnelHover.containsMouse ? Color.menu.selectedBackground : "transparent"
 
@@ -2324,7 +2362,7 @@ Panel {
                   id: statusDot
                   anchors.left: parent.left
                   anchors.leftMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.verticalCenter: tunnelName.verticalCenter
                   width: Style.space(6)
                   height: width
                   radius: width / 2
@@ -2332,11 +2370,13 @@ Panel {
                 }
 
                 Text {
+                  id: tunnelName
                   anchors.left: statusDot.right
                   anchors.leftMargin: Style.spacing.sm
                   anchors.right: tunnelMeta.left
                   anchors.rightMargin: Style.spacing.sm
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.top: parent.top
+                  anchors.topMargin: Style.space(4)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   color: root.foreground
@@ -2349,19 +2389,40 @@ Panel {
                   id: tunnelMeta
                   anchors.right: parent.right
                   anchors.rightMargin: Style.spacing.rowPaddingX
-                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.verticalCenter: tunnelName.verticalCenter
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.foreground
                   opacity: 0.55
                   textFormat: Text.PlainText
-                  // Connection count is what separates "healthy" from
-                  // "healthy, on one leg".
+                  // How long the status has held says more than the status
+                  // alone: down for twelve minutes is a blip in progress,
+                  // down for a week is a tunnel nobody has noticed. The
+                  // count is live connections — four when whole — and a
+                  // tunnel short of four already says so as "degraded".
                   text: {
                     var t = parent.modelData
+                    var status = String(t.status || "")
+                    var held = root.span(t.since)
                     var n = Number(t.connections || 0)
-                    return String(t.status || "") + (n > 0 ? "  ·  " + n + " conn" : "")
+                    return status + (held !== "" ? " for " + held : "")
+                           + (n > 0 ? "  ·  " + n + " conn" : "")
                   }
+                }
+
+                Text {
+                  anchors.left: tunnelName.left
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.spacing.rowPaddingX
+                  anchors.top: tunnelName.bottom
+                  anchors.topMargin: Style.space(2)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  opacity: 0.45
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                  text: root.tunnelRoutes(parent.modelData)
                 }
               }
             }
