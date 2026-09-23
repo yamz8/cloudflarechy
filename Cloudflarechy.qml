@@ -96,7 +96,10 @@ Panel {
   // at this width.
   property string workerDetailName: ""
   property var workerDetail: null
-  property bool workerDetailLoading: false
+  // A Worker asked for and not answered yet. Its detail opens when the answer
+  // does rather than before, so there is never a frame of it with nothing in
+  // it; until then the row that was clicked stays lit.
+  property string pendingWorker: ""
   readonly property bool workerDetailVisible: root.workerDetailName !== ""
   // Tunnels and Workers belong to the account, not to the zone in the picker,
   // and putting them under it said otherwise. They get their own screen; the
@@ -121,6 +124,29 @@ Panel {
   readonly property var zone: root.overview ? root.overview.zone : root.zoneById(root.zoneId)
   readonly property var analytics: root.overview ? root.overview.analytics : null
   readonly property string analyticsError: root.overview ? (root.overview.analytics_error || "") : ""
+
+  // What is on screen, as opposed to what was last asked for. Switching the
+  // range or the zone leaves the old view up until the new one arrives: a
+  // panel that empties first shrinks to its header and grows back again, on
+  // every switch. So everything that labels the view reads from the answer,
+  // and only the controls read from the question.
+  readonly property string shownRange: root.overview && root.overview.range
+                                       ? root.overview.range : root.range
+  readonly property bool zoneSwitching: !!(root.overview && root.overview.zone
+                                           && root.overview.zone.id
+                                           && root.overview.zone.id !== root.zoneId)
+  readonly property bool switching: root.overview !== null
+                                    && (root.zoneSwitching || root.shownRange !== root.range)
+  // A switch that lands inside this is not shown as one. Most land well
+  // inside it from the cache, and dimming for six frames would be a flicker
+  // of its own.
+  property bool switchingShown: false
+  onSwitchingChanged: if (!root.switching) root.switchingShown = false
+  Timer {
+    interval: 250
+    running: root.switching
+    onTriggered: root.switchingShown = true
+  }
   readonly property string accountId: root.zone ? (root.zone.account_id || "") : ""
   readonly property string accountName: root.zone ? (root.zone.account_name || "") : ""
 
@@ -137,9 +163,9 @@ Panel {
   readonly property bool securityReadable: root.overview
     ? String(root.overview.security_level || "") !== "" : false
   // Refused, as opposed to not loaded yet. Keyed on the error rather than on
-  // an empty level: the overview is cleared on every range change, and an
-  // empty level mid-reload would flash "?" on a zone whose level is perfectly
-  // readable — once per keypress, and in every recording of one.
+  // an empty level: there is still no overview before the first answer and
+  // after a switch that failed, and an empty level then would flash "?" on a
+  // zone whose level is perfectly readable.
   readonly property bool securityUnknown: root.overview
     ? String(root.overview.security_level_error || "") !== "" : false
 
@@ -493,10 +519,10 @@ Panel {
   function setRange(next) {
     if (next === root.range || root.ranges.indexOf(next) < 0) return
     root.range = next
-    // The old window is dropped rather than left on screen: its label would
-    // now read as the new range's, which is the one mistake this selector
-    // could make.
-    root.overview = null
+    // The old window stays on screen until the new one arrives, and the
+    // selector goes on naming the window on screen rather than the one asked
+    // for — so its label never sits over another range's figures, which is
+    // the one mistake this selector could make.
     root.loadZone(false)
   }
 
@@ -514,11 +540,20 @@ Panel {
   function loadZone(fresh) {
     if (root.zoneId === "") return
 
-    bridge.call(["overview", root.zoneId, root.range], function(payload) {
+    var askedZone = root.zoneId
+    var askedRange = root.range
+    bridge.call(["overview", askedZone, askedRange], function(payload) {
       if (!payload) return
+      // Only the latest question gets to answer. Two presses of `t` send two,
+      // and the first can land last; painting it would put a week's figures
+      // under the month the selector had moved on to.
+      if (askedZone !== root.zoneId || askedRange !== root.range) return
       if (payload.error) {
         root.error = payload.error
         root.hint = payload.hint || ""
+        // A switch that failed has nothing to show for what was asked, and
+        // the view it was leaving would pass for the answer.
+        if (root.switching) root.overview = null
         return
       }
       root.error = ""
@@ -556,10 +591,10 @@ Panel {
 
   function selectZone(id) {
     if (!id || id === root.zoneId) return
+    // The old zone stays up, dimmed if the new one is slow, until the new one
+    // arrives — for the same reason the range does. Tunnels and Workers are
+    // the account's and are replaced when their own answers land.
     root.zoneId = id
-    root.overview = null
-    root.tunnels = []
-    root.workers = []
     root.actionStatus = ""
     root.loadZone(false)
   }
@@ -578,7 +613,9 @@ Panel {
   // decides what `development_mode` and `security_level` actually end up as,
   // and this panel's job is to show that, not its own optimism.
   function runAction(action, args, successText) {
-    if (root.zoneId === "" || root.busyAction !== "") return
+    // Not while a zone switch is in flight: the switches on screen still
+    // belong to the zone being left, and zoneId already names the next one.
+    if (root.zoneId === "" || root.busyAction !== "" || root.zoneSwitching) return
     root.busyAction = action
     root.actionStatus = ""
     root.actionFailed = false
@@ -688,15 +725,14 @@ Panel {
 
   function openWorkerDetail(name) {
     if (!name || root.accountId === "") return
-    root.workerDetailName = name
-    root.workerDetail = null
-    root.workerDetailLoading = true
+    root.pendingWorker = name
     bridge.call(["worker", root.accountId, name], function(payload) {
-      root.workerDetailLoading = false
-      // A late answer for a Worker the user has already navigated away from
-      // must not paint over the one they are looking at now.
-      if (root.workerDetailName !== name) return
+      // A late answer for a Worker the user has since backed out of, or moved
+      // on from, must not open over whatever they are looking at now.
+      if (root.pendingWorker !== name) return
+      root.pendingWorker = ""
       root.workerDetail = payload || null
+      root.workerDetailName = name
     }, false)
   }
 
@@ -711,7 +747,7 @@ Panel {
   function closeWorkerDetail() {
     root.workerDetailName = ""
     root.workerDetail = null
-    root.workerDetailLoading = false
+    root.pendingWorker = ""
   }
 
   function openWorker(name) {
@@ -884,8 +920,13 @@ Panel {
       // the background poll keeps loading whatever was left selected. Leaving
       // the panel on 30 days would quietly redefine what lights the icon: a
       // bad afternoon averaged over a month stops looking like anything. So
-      // the range is a question asked while looking, and closing ends it.
-      root.range = "24h"
+      // the range is a question asked while looking, and closing ends it —
+      // straight away, not at the next poll, since the window on screen now
+      // stays until another replaces it.
+      if (root.range !== "24h") {
+        root.range = "24h"
+        root.loadZone(false)
+      }
     }
   }
 
@@ -1096,6 +1137,9 @@ Panel {
       }
       onCloseRequested: {
         if (root.purgeConfirmOpen) root.purgeConfirmOpen = false
+        // Backing out of a Worker that has not opened yet is backing out of
+        // asking for it, not out of the screen underneath.
+        else if (root.pendingWorker !== "") root.pendingWorker = ""
         else if (root.workerDetailVisible) root.closeWorkerDetail()
         else if (root.accountViewVisible) root.closeAccountView()
         // Escape backs out of the setup screen, unless backing out would leave
@@ -1289,6 +1333,7 @@ Panel {
           // heading says what the section is and the control says how wide a
           // window it is showing — which is how the zone page reads.
           Item {
+            id: trafficHead
             width: parent.width
             visible: root.zone !== null
             height: Math.max(trafficHeading.implicitHeight, rangePicker.implicitHeight)
@@ -1323,13 +1368,14 @@ Panel {
 
                 delegate: Text {
                   required property var modelData
-                  readonly property bool current: modelData === root.range
+                  readonly property bool current: modelData === root.shownRange
+                  readonly property bool pending: modelData === root.range && !current
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   color: root.foreground
                   // The unselected ranges stay legible rather than becoming
                   // decoration: they are the control, not a caption.
-                  opacity: current ? 1.0 : (rangeHover.containsMouse ? 0.8 : 0.45)
+                  opacity: current ? 1.0 : (pending || rangeHover.containsMouse ? 0.8 : 0.45)
                   textFormat: Text.PlainText
                   text: root.rangeLabel(modelData)
 
@@ -1623,7 +1669,9 @@ Panel {
                 // to go at all.
                 height: Style.space(40)
                 radius: Style.cornerRadius / 2
-                color: routeHover.containsMouse && runnable
+                // Runnable first: a route with no Worker has an empty script, and
+                // so does "nothing pending" — without it, every such row lit up.
+                color: runnable && (routeHover.containsMouse || root.pendingWorker === script)
                        ? Color.menu.selectedBackground : "transparent"
 
                 MouseArea {
@@ -1871,6 +1919,22 @@ Panel {
               return bits.join("  ·  ")
             }
           }
+        }
+
+        // Over everything under the traffic heading while a switch is slow
+        // enough to notice. The view being left stays up rather than
+        // emptying, so it has to look like it is on its way out — and this
+        // takes the clicks, because the switches under it belong to the zone
+        // being left.
+        Rectangle {
+          width: column.width
+          y: trafficHead.y + trafficHead.height
+          height: Math.max(0, column.height - y)
+          visible: root.switchingShown && trafficHead.visible
+          color: Color.popups.background
+          opacity: 0.6
+
+          MouseArea { anchors.fill: parent; hoverEnabled: true }
         }
       }
 
@@ -2347,7 +2411,8 @@ Panel {
                 width: parent.width
                 height: Style.space(24)
                 radius: Style.cornerRadius / 2
-                color: workerHover.containsMouse ? Color.menu.selectedBackground : "transparent"
+                color: workerHover.containsMouse || root.pendingWorker === modelData.name
+                       ? Color.menu.selectedBackground : "transparent"
 
                 MouseArea {
                   id: workerHover
@@ -2536,10 +2601,9 @@ Panel {
             // window is fixed — and said out loud when it differs from the
             // one you arrived from, because otherwise drilling into a Worker
             // silently changes the question being asked.
-            text: root.workerDetailLoading ? "LAST 24 HOURS  ·  LOADING"
-                : workerView.failure !== "" ? "LAST 24 HOURS  ·  UNAVAILABLE"
-                : root.range !== "24h" ? "LAST 24 HOURS  ·  ZONE SHOWS "
-                                         + root.rangeLabel(root.range)
+            text: workerView.failure !== "" ? "LAST 24 HOURS  ·  UNAVAILABLE"
+                : root.shownRange !== "24h" ? "LAST 24 HOURS  ·  ZONE SHOWS "
+                                              + root.rangeLabel(root.shownRange)
                 : "LAST 24 HOURS"
           }
 

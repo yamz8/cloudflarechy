@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Switching the range, the zone or into a Worker no longer empties the panel
+  first. It used to drop the view it was leaving the moment you asked, and
+  the panel shrank to its header for as long as the answer took, then grew
+  back — a jump on every switch, even from cache, since the answer still
+  comes from a separate process. The old view now stays until the new one has
+  arrived and is swapped in one frame. The selector keeps naming the window on
+  screen rather than the one asked for, so figures never sit under another
+  range's label; the one asked for is lit instead, as is a Worker row that
+  has been clicked. A switch slow enough to notice dims the view it is
+  leaving. While a zone switch is in flight the switches do nothing, because
+  the ones on screen belong to the zone being left.
+- Only the latest question answers. Two quick presses of `t` sent two
+  requests, and the first could land last and paint a week's figures under
+  the month the selector had moved on to.
+
 ## 0.9.4
 
 - Under Attack Mode says it cannot tell, instead of saying it is off. It is a
