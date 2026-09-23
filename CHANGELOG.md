@@ -16,6 +16,17 @@
 - Only the latest question answers. Two quick presses of `t` sent two
   requests, and the first could land last and paint a week's figures under
   the month the selector had moved on to.
+- `tests/demo.sh --social` records a twenty-second cut for a feed rather than
+  the README: 4:5 at 60fps, about two seconds on each of the panel's views,
+  then three Omarchy themes and back to the first. Themes and a larger type
+  size are applied to the running shell only, and the closing restart takes
+  them away again.
+- The mock serves traffic with a shape in it when asked
+  (`CLOUDFLARECHY_MOCK_SHOWCASE=1`) — quiet nights, a working day, one hour
+  that took off. The fixture's ramp is built for exact deltas and filmed as a
+  zone nobody visits. Its Workers get the same day, and the account list is
+  summed from the same rows as each Worker's detail so the two agree. The
+  test suite does not set it.
 
 ## 0.9.4
 

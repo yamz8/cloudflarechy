@@ -14,7 +14,9 @@ failure the plugin has a retry path for and a fixture that never fails it
 would never exercise it.
 """
 import json
+import math
 import os
+import random
 import re
 import sys
 import datetime
@@ -44,6 +46,15 @@ STATE = {"security_level": "high", "development_mode": 0, "purges": 0}
 # the icon change when a switch goes on — so the demo asks for a calm account
 # and gets one. Nothing in the test suite sets this.
 CALM = os.environ.get("CLOUDFLARECHY_MOCK_CALM") == "1"
+
+# The fixture's traffic is built for arithmetic, not for looking at: a straight
+# ramp against a flat line, so every delta lands on a round number. Filmed, that
+# reads as a zone nobody visits. A showcase account has a day in it — quiet
+# nights, a working-hours hump, one hour that took off — and a week with
+# weekends. Seeded, so every take draws the same shapes. Nothing in the test
+# suite sets this either; the numbers it produces are not hand-checkable and
+# are not meant to be.
+SHOWCASE = os.environ.get("CLOUDFLARECHY_MOCK_SHOWCASE") == "1"
 
 
 def ok(result):
@@ -79,6 +90,8 @@ def hourly(with_status=False):
     """
     now = datetime.datetime.now(datetime.timezone.utc).replace(
         minute=0, second=0, microsecond=0)
+    if SHOWCASE:
+        return showcase_hourly(now, with_status)
     out = []
     for i in range(48):
         t = now - datetime.timedelta(hours=47 - i)
@@ -133,6 +146,8 @@ def daily(buckets, with_status=False):
     two, so a delta reading the wrong field cannot pass.
     """
     today = datetime.datetime.now(datetime.timezone.utc).date()
+    if SHOWCASE:
+        return showcase_daily(today, buckets, with_status)
     window = buckets // 2
     out = []
     for i in range(buckets):
@@ -156,6 +171,116 @@ def daily(buckets, with_status=False):
                 if recent else
                 [{"edgeResponseStatus": 200, "requests": requests}])
         out.append(group)
+    return out
+
+
+def showcase_group(key, value, requests, cache_fraction, rng, with_status):
+    fivexx = int(requests * rng.uniform(0.0004, 0.0012))
+    fourxx = int(requests * rng.uniform(0.01, 0.02))
+    group = {
+        "dimensions": {key: value},
+        "sum": {"requests": requests, "bytes": requests * 41000,
+                "cachedRequests": int(requests * cache_fraction),
+                "cachedBytes": int(requests * 41000 * (cache_fraction + 0.05)),
+                "threats": int(requests * rng.uniform(0.001, 0.003))},
+    }
+    if with_status:
+        group["sum"]["responseStatusMap"] = [
+            {"edgeResponseStatus": 200, "requests": requests - fivexx - fourxx},
+            {"edgeResponseStatus": 404, "requests": fourxx},
+            {"edgeResponseStatus": 502, "requests": fivexx},
+        ]
+    return group
+
+
+def showcase_hourly(now, with_status):
+    """A day with a shape: low overnight, a hump through the working day, and
+    one hour in the recent window that got linked from somewhere. The recent
+    day runs about a fifth busier than the one before it."""
+    rng = random.Random(7)
+    spike = 24 + 17
+    out = []
+    for i in range(48):
+        t = now - datetime.timedelta(hours=47 - i)
+        # Peak mid-afternoon UTC, trough before dawn.
+        daylight = 0.5 - 0.5 * math.cos((t.hour - 3) / 24 * 2 * math.pi)
+        requests = 5200 + 21000 * daylight ** 1.6
+        requests *= rng.uniform(0.9, 1.1) * (1.2 if i >= 24 else 1.0)
+        if i == spike:
+            requests *= 2.6
+        cache = rng.uniform(0.86, 0.9) if i >= 24 else rng.uniform(0.8, 0.84)
+        out.append(showcase_group("datetime", t.strftime("%Y-%m-%dT%H:00:00Z"),
+                                  int(requests), cache, rng, with_status))
+    return out
+
+
+def showcase_daily(today, buckets, with_status):
+    """Weekdays busier than weekends, and growing."""
+    rng = random.Random(buckets)
+    out = []
+    for i in range(buckets):
+        d = today - datetime.timedelta(days=buckets - 1 - i)
+        requests = 340000 * (1 + 0.35 * i / buckets) * rng.uniform(0.92, 1.08)
+        if d.weekday() >= 5:
+            requests *= 0.62
+        cache = rng.uniform(0.83, 0.89)
+        out.append(showcase_group("date", d.strftime("%Y-%m-%d"),
+                                  int(requests), cache, rng, with_status))
+    return out
+
+
+# Per Worker: its busiest hour, its CPU p50 in microseconds, and the hours in
+# which it threw. api-router is the one the demo opens.
+SHOWCASE_WORKERS = {
+    "api-router": (5200, 8644, {9: 14, 10: 31, 17: 6}),
+    "image-resize": (1900, 21400, {}),
+}
+
+
+def showcase_worker_rows(script, now):
+    """A Worker's last 24 hours with the zone's day in them, one row per hour
+    and status — the same rows both the detail and the account list are
+    summed from, so the drill-down agrees with the list it came from."""
+    peak, cpu, thrown = SHOWCASE_WORKERS[script]
+    rng = random.Random(script)
+    rows = []
+    for i in range(24):
+        t = now - datetime.timedelta(hours=23 - i)
+        daylight = 0.5 - 0.5 * math.cos((t.hour - 3) / 24 * 2 * math.pi)
+        requests = int((0.18 + 0.82 * daylight ** 1.4) * peak * rng.uniform(0.88, 1.12))
+        hour = t.strftime("%Y-%m-%dT%H:00:00Z")
+        rows.append({
+            "dimensions": {"datetimeHour": hour, "status": "success"},
+            "sum": {"requests": requests, "errors": 0, "subrequests": requests // 3},
+            "quantiles": {"cpuTimeP50": int(cpu * rng.uniform(0.9, 1.1)),
+                          "cpuTimeP99": cpu * 3},
+        })
+        if i in thrown:
+            rows.append({
+                "dimensions": {"datetimeHour": hour, "status": "scriptThrewException"},
+                "sum": {"requests": thrown[i], "errors": thrown[i], "subrequests": 0},
+                "quantiles": {"cpuTimeP50": 457, "cpuTimeP99": 900},
+            })
+    return rows
+
+
+def showcase_worker_totals(now):
+    out = []
+    for script in SHOWCASE_WORKERS:
+        by_status = {}
+        for row in showcase_worker_rows(script, now):
+            status = row["dimensions"]["status"]
+            total = by_status.setdefault(status, {"requests": 0, "errors": 0,
+                                                  "subrequests": 0, "p50": 0, "busiest": 0})
+            for k in ("requests", "errors", "subrequests"):
+                total[k] += row["sum"][k]
+            if row["sum"]["requests"] > total["busiest"]:
+                total["busiest"] = row["sum"]["requests"]
+                total["p50"] = row["quantiles"]["cpuTimeP50"]
+        for status, total in by_status.items():
+            out.append({"dimensions": {"scriptName": script, "status": status},
+                        "sum": {k: total[k] for k in ("requests", "errors", "subrequests")},
+                        "quantiles": {"cpuTimeP50": total["p50"]}})
     return out
 
 
@@ -268,6 +393,18 @@ class Handler(BaseHTTPRequestHandler):
                 # The detail query asks for an hour dimension and filters to one
                 # script. Exact, hand-checkable numbers: 24 hours of 100 good
                 # requests, and two hours that also threw five exceptions.
+                now = datetime.datetime.now(datetime.timezone.utc).replace(
+                    minute=0, second=0, microsecond=0)
+                if SHOWCASE and "datetimeHour" in query:
+                    script = variables.get("script", "")
+                    rows = (showcase_worker_rows(script, now)
+                            if script in SHOWCASE_WORKERS else [])
+                    return self.reply({"data": {"viewer": {"accounts": [
+                        {"workersInvocationsAdaptive": rows}]}}, "errors": None})
+                if SHOWCASE:
+                    return self.reply({"data": {"viewer": {"accounts": [{
+                        "workersInvocationsAdaptive": showcase_worker_totals(now)}]}},
+                        "errors": None})
                 if "datetimeHour" in query:
                     script = variables.get("script", "")
                     if script not in ("api-router", "image-resize"):

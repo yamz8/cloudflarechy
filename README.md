@@ -388,7 +388,8 @@ covers the script, not the QML: the panel is still verified by looking at it.
 
 ```bash
 ./tests/capture.sh     # the four images above
-./tests/demo.sh        # a ~48s recording, demo.mp4
+./tests/demo.sh            # a ~20s recording, demo.mp4
+./tests/demo.sh --social   # a ~19s cut for a feed, demo-social.mp4
 ```
 
 Regenerates the three images above against the mock, so the README shows the
@@ -411,6 +412,18 @@ is no use when the point is watching it light up.
 Every beat is a keystroke, so nothing depends on where the mouse is. The
 recording is gitignored: it is a megabyte that changes wholesale on each take,
 and the script that makes it is the part worth keeping.
+
+`--social` makes a different cut, for a feed that autoplays it on a phone:
+1080x1350 at 60fps, about two seconds on each view — the zone at a day and
+a week, a Worker, the zone at a month, the account — and then the panel going through three
+Omarchy themes and back. The shell is drawn at a
+larger type size while it records so the panel fills the frame with real
+pixels. The shell's wallpaper wipe drops to black for a few frames as it
+finishes; those frames are cut and the one before held. The themes and the type size live only in the running shell's memory —
+nothing is written — and the restart at the end puts your own back. The mock
+serves traffic with a day in it for this cut (`CLOUDFLARECHY_MOCK_SHOWCASE`);
+the tests never ask for it. `CLOUDFLARECHY_DEMO_KEEP=<dir>` keeps the raw
+recording and its timings.
 
 The assertions were checked by breaking the code on purpose and confirming they
 went red. That found a real gap the first time — the security-level fallback

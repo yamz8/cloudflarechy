@@ -9,14 +9,23 @@
 # The panel is keyboard-driven, so the demo is too: every beat is a keystroke
 # or an IPC call, held long enough to read. Nothing depends on where the mouse
 # is, which is just as well, because a warped cursor dismisses the panel.
+#
+# --social makes the cut meant for a feed rather than the README: 4:5 and
+# 60fps, the payoff first instead of last, a zoom onto the bar icon when it
+# lights, captions for a viewer with the sound off, a pass through three
+# Omarchy themes, and traffic with a day in it instead of the fixture's ramp.
+# The README cut is unchanged without it.
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(dirname "$HERE")
+SOCIAL=0
+if [[ ${1:-} == --social ]]; then SOCIAL=1; shift; fi
 PORT="${CLOUDFLARECHY_DEMO_PORT:-18799}"
 WORKSPACE="${CLOUDFLARECHY_DEMO_WORKSPACE:-9}"
 MONITOR="${CLOUDFLARECHY_DEMO_MONITOR:-}"
-OUT="${1:-$ROOT/demo.mp4}"
+if (( SOCIAL )); then OUT="${1:-$ROOT/demo-social.mp4}"; else OUT="${1:-$ROOT/demo.mp4}"; fi
+FPS=30; (( SOCIAL )) && FPS=60
 # The recorder needs a moment before it is reliably capturing, and those frames
 # are a still bar nobody needs to watch. Recorded, then trimmed: TRIM is set a
 # little under SETTLE so a beat of the bar at rest survives as the opening.
@@ -79,7 +88,8 @@ trap cleanup EXIT
 
 # --- a Cloudflare that is not Cloudflare ----------------------------------
 echo "starting the mock"
-CLOUDFLARECHY_MOCK_CALM=1 python3 "$HERE/mock-api.py" "$PORT" >/dev/null 2>&1 &
+CLOUDFLARECHY_MOCK_CALM=1 CLOUDFLARECHY_MOCK_SHOWCASE=$SOCIAL \
+  python3 "$HERE/mock-api.py" "$PORT" >/dev/null 2>&1 &
 MOCK_PID=$!
 for _ in $(seq 20); do
   curl -sf -o /dev/null "http://127.0.0.1:$PORT/zones" -H "Authorization: Bearer x" && break
@@ -119,6 +129,11 @@ sleep 1
   die "workspace $WORKSPACE has windows on it; set CLOUDFLARECHY_DEMO_WORKSPACE
   to an empty one — the demo should be the panel over a wallpaper, nothing else"
 
+if (( SOCIAL )); then
+  . "$HERE/demo-social.sh"
+  social_prepare
+fi
+
 # --- work out where to point the camera ------------------------------------
 # Same trick the screenshots use: the panel is whatever changes between a frame
 # with it closed and a frame with it open. The crop reaches up to the top of
@@ -148,6 +163,11 @@ done
 (( pw > 0 )) || die "could not find the panel in five attempts. Something on
   screen keeps changing between frames — a notification, or an animated
   wallpaper — and the demo needs a still backdrop."
+
+if (( SOCIAL )); then
+  social_cut
+  exit 0
+fi
 
 # Margin on the left, the bar at the top, a little air at the bottom. Even
 # numbers because h264 will not encode odd dimensions.

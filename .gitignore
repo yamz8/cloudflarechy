@@ -7,3 +7,6 @@
 # The recording tests/demo.sh makes. Reproducible from the script, and a
 # megabyte of binary that changes wholesale on every take.
 demo.mp4
+
+# The feed cut, tests/demo.sh --social. Same reasons.
+demo-social.mp4
